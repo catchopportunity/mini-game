@@ -170,22 +170,27 @@ CITY_DEF.forEach(([idx, name, price, landmarkName, landmarkIcon], order) => {
   };
 });
 
+// 돈을 내는 카드는 "내" 순자산에 비례, 돈을 받는 카드는 "상대" 순자산에 비례
+function opponentOf(p) { return players[1 - p.idx]; }
+function payAmount(p, rate) { return Math.max(1, Math.round(netWorth(p) * rate)); }
+function gainAmount(p, rate) { return Math.max(1, Math.round(netWorth(opponentOf(p)) * rate)); }
+
 const CARDS = [
-  { text: '공항 마일리지 적립! +100만원', fn: p => { p.cash += 100; } },
-  { text: '세금 추징 -80만원', fn: p => { spend(p, 80); pot += 80; } },
-  { text: '길거리 이벤트 당첨! +150만원', fn: p => { p.cash += 150; } },
-  { text: '여권 분실로 벌금 -60만원', fn: p => { spend(p, 60); pot += 60; } },
-  { text: '기부 활동 -50만원', fn: p => { spend(p, 50); pot += 50; } },
-  { text: '보너스 상금 +200만원', fn: p => { p.cash += 200; } },
+  { text: p => `공항 마일리지 적립! +${gainAmount(p, 0.08)}만원`, fn: p => { p.cash += gainAmount(p, 0.08); } },
+  { text: p => `세금 추징 -${payAmount(p, 0.06)}만원`, fn: p => { const amt = payAmount(p, 0.06); spend(p, amt); pot += amt; } },
+  { text: p => `길거리 이벤트 당첨! +${gainAmount(p, 0.10)}만원`, fn: p => { p.cash += gainAmount(p, 0.10); } },
+  { text: p => `여권 분실로 벌금 -${payAmount(p, 0.04)}만원`, fn: p => { const amt = payAmount(p, 0.04); spend(p, amt); pot += amt; } },
+  { text: p => `기부 활동 -${payAmount(p, 0.03)}만원`, fn: p => { const amt = payAmount(p, 0.03); spend(p, amt); pot += amt; } },
+  { text: p => `보너스 상금 +${gainAmount(p, 0.12)}만원`, fn: p => { p.cash += gainAmount(p, 0.12); } },
   { text: '밀수 적발! 무인도로 강제 이송', fn: p => { p.pos = 10; p.stuck = true; p.jailTurns = 0; interrupted = true; } },
   { text: '출발점으로 순간이동 (급여 없음)', fn: p => { p.pos = 0; interrupted = true; } },
   { text: '투자 성공! 다음 세금은 면제됩니다.', fn: p => { p.taxExempt = true; } },
-  { text: '컨설팅비 청구! 상대에게 100만원을 받았습니다.', fn: p => { const opp = players[1 - p.idx]; chargePlayer(opp, 100, { toPlayer: p }); } },
-  { text: '선의의 기부자 등장! 상대에게 80만원을 지불합니다.', fn: p => { const opp = players[1 - p.idx]; chargePlayer(p, 80, { toPlayer: opp }); } },
-  { text: '보물 지도 발견! 지도를 팔아 +120만원', fn: p => { p.cash += 120; } },
+  { text: p => `컨설팅비 청구! 상대에게 ${gainAmount(p, 0.08)}만원을 받았습니다.`, fn: p => { chargePlayer(opponentOf(p), gainAmount(p, 0.08), { toPlayer: p }); } },
+  { text: p => `선의의 기부자 등장! 상대에게 ${payAmount(p, 0.06)}만원을 지불합니다.`, fn: p => { chargePlayer(p, payAmount(p, 0.06), { toPlayer: opponentOf(p) }); } },
+  { text: p => `보물 지도 발견! 지도를 팔아 +${gainAmount(p, 0.09)}만원`, fn: p => { p.cash += gainAmount(p, 0.09); } },
   { text: '황금열쇠 두 장 찬스! 카드를 한 번 더 뽑습니다.', drawAgain: true, fn: () => {} },
-  { text: '은행 이자 수익! 보유 현금의 10% 획득', fn: p => { p.cash += Math.round(p.cash * 0.1); } },
-  { text: '벌금 고지서 도착! 보유 현금의 5% 납부', fn: p => { const amt = Math.round(p.cash * 0.05); spend(p, amt); pot += amt; } },
+  { text: p => `투자 배당 수익! +${gainAmount(p, 0.08)}만원 획득`, fn: p => { p.cash += gainAmount(p, 0.08); } },
+  { text: p => `벌금 고지서 도착! -${payAmount(p, 0.05)}만원 납부`, fn: p => { const amt = payAmount(p, 0.05); spend(p, amt); pot += amt; } },
   { text: '무료 리모델링 쿠폰! 보유 도시 중 하나가 무료로 업그레이드됩니다.', fn: p => {
       const candidates = TILES.filter(t => t && t.type === 'city' && t.owner === p.idx && t.stars < 3);
       if (candidates.length) {
@@ -193,10 +198,12 @@ const CARDS = [
         t.stars++;
         t.stageLap = p.lapCount;
       } else {
-        p.cash += 80;
+        p.cash += gainAmount(p, 0.06);
       }
     } },
 ];
+
+function cardText(card, p) { return typeof card.text === 'function' ? card.text(p) : card.text; }
 
 function spend(p, amt) { p.cash -= amt; }
 
@@ -270,10 +277,17 @@ function landmarkCost(tile) {
   return Math.round(tile.price * 2.5);
 }
 
-// 땅값 + 지금까지 지은 건물에 들어간 금액 (별 k번째 건설 비용의 합)
+// 땅값 + 지금까지 지은 건물에 들어간 금액 (별 k번째 건설 비용의 합 + 랜드마크 비용)
 function totalInvested(tile) {
   const n = tile.stars;
-  return tile.price + Math.round(tile.price * 0.6 * n * (n + 1) / 2);
+  let value = tile.price + Math.round(tile.price * 0.6 * n * (n + 1) / 2);
+  if (tile.landmark) value += landmarkCost(tile);
+  return value;
+}
+
+// 강제 매각 시 자산 가치: 도시는 땅값+건물 투자금 전부, 그 외는 매입가
+function assetValue(tile) {
+  return tile.type === 'city' ? totalInvested(tile) : tile.price;
 }
 
 function acquireCost(tile) {
@@ -307,10 +321,10 @@ function ensureFunds(player, amount) {
   if (player.cash >= amount) return true;
   const owned = TILES.filter(t => t && t.owner === player.idx &&
     (t.type === 'city' || t.type === 'compound' || t.type === 'trust'))
-    .sort((a, b) => b.price - a.price);
+    .sort((a, b) => assetValue(b) - assetValue(a));
   for (const t of owned) {
     if (player.cash >= amount) break;
-    const refund = Math.floor(t.price * 0.5);
+    const refund = Math.floor(assetValue(t) * 0.5);
     t.owner = null;
     if (t.type === 'city') { t.stars = 0; t.landmark = false; t.stageLap = null; }
     if (t.type === 'compound') t.hits = 0;
@@ -386,7 +400,7 @@ function startTurn(idx) {
   current = idx;
   interrupted = false;
   const p = players[idx];
-  if (p.stuck && p.jailTurns >= 3) {
+  if (p.stuck && p.jailTurns >= 2) {
     p.stuck = false; p.jailTurns = 0;
     log(`🏝️ ${p.name} 무인도에서 강제 석방!`);
   }
@@ -409,7 +423,7 @@ function tileFavorability(tile, player) {
   if (!tile) return 0;
   switch (tile.type) {
     case 'start': return 1;
-    case 'island': return 0;
+    case 'island': return -6;
     case 'rest': return 3 + pot * 0.01;
     case 'warp': return -1;
     case 'tax': return -2 - taxAmount(player) * 0.01;
@@ -444,12 +458,17 @@ function playCasino(player) {
   return { stake, mult, label };
 }
 
-// 자금이 넉넉하면 0, 파산에 가까워질수록(현금이 SAFE_CASH 아래로 떨어질수록) 1에 수렴
-const SAFE_CASH = 150;
+// 절대 현금이 아니라 상대와의 자산 배율 기준: 서로 자산이 비슷하면 0,
+// 상대 자산이 내 자산의 5배에 가까워질수록(그 이상은 상한) 1에 수렴
+const DESPERATION_RATIO_CAP = 5;
 function desperationLevel(player) {
-  if (player.cash >= SAFE_CASH) return 0;
-  const raw = 1 - player.cash / SAFE_CASH;
-  return Math.min(1, Math.max(0, raw)) ** 3;
+  const opponent = players[1 - player.idx];
+  const myWorth = Math.max(1, netWorth(player));
+  const oppWorth = netWorth(opponent);
+  const ratio = oppWorth / myWorth;
+  if (ratio <= 1) return 0;
+  const raw = Math.min(1, (ratio - 1) / (DESPERATION_RATIO_CAP - 1));
+  return raw ** 3;
 }
 
 // rawSum 기준 ±1칸 중 플레이어에게 가장 유리한 합을 몰래 골라준다
@@ -490,7 +509,7 @@ function rollForCurrent() {
       movePlayerBy(p, d1 + d2, () => resolveTile(p, false));
     } else {
       p.jailTurns++;
-      log(`🎲 ${p.name}: ${d1} + ${d2} = ${d1 + d2}. 탈출 실패... (대기 ${p.jailTurns}/3턴)`);
+      log(`🎲 ${p.name}: ${d1} + ${d2} = ${d1 + d2}. 탈출 실패... (대기 ${p.jailTurns}/2턴)`);
       SFX.jail();
       render();
       setTimeout(switchTurn, DELAY);
@@ -578,8 +597,12 @@ function resolveTile(player, wasDouble) {
       afterResolve();
       break;
     case 'island':
-      log(`${player.name}, 무인도 방문 (그냥 지나가는 중).`);
-      afterResolve();
+      player.stuck = true;
+      player.jailTurns = 0;
+      log(`🏝️ ${player.name}, 무인도에 직접 도착해서 갇혔습니다!`);
+      SFX.jail();
+      render();
+      setTimeout(switchTurn, DELAY);
       break;
     case 'rest': {
       const gained = pot;
@@ -620,16 +643,18 @@ function resolveTile(player, wasDouble) {
     case 'goldenkey': {
       const card = CARDS[Math.floor(Math.random() * CARDS.length)];
       SFX.card();
-      showKeyCard(player.name, card.text, () => {
-        log(`🔑 ${player.name}: ${card.text}`);
+      const drawnText = cardText(card, player);
+      showKeyCard(player.name, drawnText, () => {
+        log(`🔑 ${player.name}: ${drawnText}`);
         card.fn(player);
         render();
         if (card.drawAgain) {
           const others = CARDS.filter(c => !c.drawAgain);
           const card2 = others[Math.floor(Math.random() * others.length)];
           SFX.card();
-          showKeyCard(player.name, card2.text, () => {
-            log(`🔑 ${player.name}: ${card2.text}`);
+          const drawnText2 = cardText(card2, player);
+          showKeyCard(player.name, drawnText2, () => {
+            log(`🔑 ${player.name}: ${drawnText2}`);
             card2.fn(player);
             render();
             afterResolve();
@@ -984,9 +1009,10 @@ function createBoard() {
 function render() {
   players.forEach((p, i) => {
     document.getElementById('cash' + i).textContent = fmt(p.cash);
-    const cnt = TILES.filter(t => t && t.owner === i &&
-      (t.type === 'city' || t.type === 'compound' || t.type === 'trust')).length;
-    document.getElementById('props' + i).textContent = `보유 자산 ${cnt}` + (p.stuck ? ` · 🏝️무인도(${p.jailTurns}/3)` : '');
+    const owned = TILES.filter(t => t && t.owner === i &&
+      (t.type === 'city' || t.type === 'compound' || t.type === 'trust'));
+    const totalValue = owned.reduce((sum, t) => sum + assetValue(t), 0);
+    document.getElementById('props' + i).textContent = `보유 자산 ${owned.length}개 (${fmt(totalValue)})` + (p.stuck ? ` · 🏝️무인도(${p.jailTurns}/2)` : '');
     document.getElementById('pcard' + i).classList.toggle('turn', current === i && phase !== 'gameover');
   });
 
@@ -1140,7 +1166,7 @@ function renderActions() {
   if (phase === 'idle' && !p.isBot && current === 0) {
     if (p.stuck) {
       promptBox.style.display = 'block';
-      promptBox.textContent = `🏝️ 무인도에 갇혔습니다! 더블이 나오면 탈출 (실패 ${p.jailTurns}/3턴, 3턴 차면 강제 석방)`;
+      promptBox.textContent = `🏝️ 무인도에 갇혔습니다! 더블이 나오면 탈출 (실패 ${p.jailTurns}/2턴, 2턴 차면 강제 석방)`;
     }
     const rollBtn = document.createElement('button');
     rollBtn.textContent = p.stuck ? '🎲 탈출 시도' : '🎲 주사위 굴리기';
