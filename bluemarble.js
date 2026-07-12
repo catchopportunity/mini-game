@@ -110,6 +110,8 @@ function startBGM() {
   loop();
 }
 
+const PLAYER_COLORS = ['#60a5fa', '#f472b6', '#34d399', '#fbbf24'];
+
 const GROUPS = [
   { id: 0, name: '동남아', color: '#f472b6' },
   { id: 1, name: '동아시아', color: '#fb923c' },
@@ -170,8 +172,12 @@ CITY_DEF.forEach(([idx, name, price, landmarkName, landmarkIcon], order) => {
   };
 });
 
-// 돈을 내는 카드는 "내" 순자산에 비례, 돈을 받는 카드는 "상대" 순자산에 비례
-function opponentOf(p) { return players[1 - p.idx]; }
+// 돈을 내는 카드는 "내" 순자산에 비례, 돈을 받는 카드는 "상대" 순자산에 비례.
+// 봇이 여럿이면 "상대"는 그 순간 가장 자산 많은 다른 활성 플레이어(1등 라이벌) 기준.
+function opponentOf(p) {
+  const rivals = players.filter(pl => pl.idx !== p.idx && !pl.eliminated);
+  return rivals.reduce((best, pl) => (!best || netWorth(pl) > netWorth(best)) ? pl : best, null);
+}
 function payAmount(p, rate) { return Math.max(1, Math.round(netWorth(p) * rate)); }
 // 상대와 5배 이상 격차로 뒤처진 플레이어(사람 전용)에게는 획득액을 대폭 증폭
 const DESPERATE_GAIN_BOOST = 3;
@@ -195,8 +201,8 @@ const CARDS = [
   { favorable: false, text: '밀수 적발! 무인도로 강제 이송', fn: p => { p.pos = 10; p.stuck = true; p.jailTurns = 0; interrupted = true; } },
   { favorable: false, text: '출발점으로 순간이동 (급여 없음)', fn: p => { p.pos = 0; interrupted = true; } },
   { favorable: true, text: '투자 성공! 다음 세금은 면제됩니다.', fn: p => { p.taxExempt = true; } },
-  { favorable: true, text: p => `컨설팅비 청구! 상대에게 ${gainAmount(p, 0.08)}만원을 받았습니다.`, fn: p => { chargePlayer(opponentOf(p), gainAmount(p, 0.08), { toPlayer: p }); } },
-  { favorable: false, text: p => `선의의 기부자 등장! 상대에게 ${payAmount(p, 0.06)}만원을 지불합니다.`, fn: p => { chargePlayer(p, payAmount(p, 0.06), { toPlayer: opponentOf(p) }); } },
+  { favorable: true, text: p => `컨설팅비 청구! ${opponentOf(p).name}에게 ${gainAmount(p, 0.08)}만원을 받았습니다.`, fn: p => { chargePlayer(opponentOf(p), gainAmount(p, 0.08), { toPlayer: p }); } },
+  { favorable: false, text: p => `선의의 기부자 등장! ${opponentOf(p).name}에게 ${payAmount(p, 0.06)}만원을 지불합니다.`, fn: p => { chargePlayer(p, payAmount(p, 0.06), { toPlayer: opponentOf(p) }); } },
   { favorable: true, text: p => `보물 지도 발견! 지도를 팔아 +${gainAmount(p, 0.09)}만원`, fn: p => { p.cash += gainAmount(p, 0.09); } },
   { favorable: true, text: '황금열쇠 두 장 찬스! 카드를 한 번 더 뽑습니다.', drawAgain: true, fn: () => {} },
   { favorable: true, text: p => `투자 배당 수익! +${gainAmount(p, 0.08)}만원 획득`, fn: p => { p.cash += gainAmount(p, 0.08); } },
@@ -236,6 +242,10 @@ function tilePos(i) {
 }
 
 let players, pot, current, phase, interrupted;
+let botCount = 1;
+let botThinking = false;
+const BOT_THINK_DELAY = [500, 950]; // [min, max] ms random range before a bot reveals its decision
+function thinkDelay() { return BOT_THINK_DELAY[0] + Math.random() * (BOT_THINK_DELAY[1] - BOT_THINK_DELAY[0]); }
 const tileEls = [];
 
 // 새 게임이 시작되면 이전 게임에서 예약된 setTimeout이 뒤늦게 실행돼 리셋된 상태를 건드리지 않도록 세대 값으로 무효화
@@ -253,15 +263,22 @@ function initGame() {
     else if (t.type === 'trust') { t.owner = null; }
   });
   players = [
-    { idx: 0, name: '플레이어', isBot: false, cash: 100, pos: 0, stuck: false, jailTurns: 0, doublesCount: 0, lapCount: 0, taxExempt: false },
-    { idx: 1, name: '봇', isBot: true, cash: 1000, pos: 0, stuck: false, jailTurns: 0, doublesCount: 0, lapCount: 0, taxExempt: false },
+    { idx: 0, name: '플레이어', isBot: false, cash: 100, pos: 0, stuck: false, jailTurns: 0, doublesCount: 0, lapCount: 0, taxExempt: false, eliminated: false },
   ];
+  for (let i = 0; i < botCount; i++) {
+    players.push({
+      idx: i + 1,
+      name: botCount === 1 ? '봇' : `${i + 1}호봇`,
+      isBot: true, cash: 1000, pos: 0, stuck: false, jailTurns: 0, doublesCount: 0, lapCount: 0, taxExempt: false, eliminated: false,
+    });
+  }
   pot = 0;
   phase = 'idle';
   interrupted = false;
+  botThinking = false;
   document.getElementById('log').innerHTML = '';
   document.getElementById('overlay').style.display = 'none';
-  current = Math.random() < 0.5 ? 0 : 1;
+  current = Math.floor(Math.random() * players.length);
   log('🎮 새 게임 시작! ' + players[current].name + '가 먼저 시작합니다.');
   render();
   startTurn(current);
@@ -378,13 +395,29 @@ function chargePlayer(player, amount, opts = {}) {
   return true;
 }
 
+// 봇이 여럿일 때는 파산 즉시 게임이 끝나지 않고 그 플레이어만 탈락, 남은 인원으로 계속.
+// 사람이 파산하면 그 즉시 패배로 게임 종료. 최후의 1인이 남으면 그 사람이 승자.
 function bankrupt(player) {
-  phase = 'gameover';
-  const winner = players[1 - player.idx];
-  log(`💥 ${player.name} 파산! 승자는 ${winner.name}!`);
-  render();
-  winner.idx === 0 ? SFX.win() : SFX.bankrupt();
-  showOverlay('GAME OVER', `${winner.name} 승리! (${player.name} 파산)`);
+  player.eliminated = true;
+  player.cash = 0;
+  SFX.bankrupt();
+  const active = players.filter(p => !p.eliminated);
+  if (player.idx === 0) {
+    phase = 'gameover';
+    log(`💥 ${player.name} 파산! 게임 종료...`);
+    render();
+    showOverlay('GAME OVER', '파산했습니다... 다음엔 더 잘할 수 있을 거예요!');
+  } else if (active.length <= 1) {
+    phase = 'gameover';
+    const winner = active[0];
+    log(`💥 ${player.name} 파산으로 탈락! 최후의 1인은 ${winner.name}!`);
+    render();
+    if (winner.idx === 0) SFX.win();
+    showOverlay('GAME OVER', `${winner.name} 승리! (${player.name} 파산)`);
+  } else {
+    log(`💥 ${player.name} 파산으로 탈락! (남은 인원 ${active.length}명)`);
+    render();
+  }
 }
 
 function showOverlay(title, sub) {
@@ -494,7 +527,7 @@ function playCasino(player) {
 // 상대 자산이 내 자산의 5배에 가까워질수록(그 이상은 상한) 1에 수렴
 const DESPERATION_RATIO_CAP = 5;
 function desperationLevel(player) {
-  const opponent = players[1 - player.idx];
+  const opponent = opponentOf(player);
   const myWorth = Math.max(1, netWorth(player));
   const oppWorth = netWorth(opponent);
   const ratio = oppWorth / myWorth;
@@ -645,6 +678,7 @@ function resolveTile(player, wasDouble) {
 
   const afterResolve = () => {
     if (phase === 'gameover') return;
+    if (player.eliminated) { schedule(switchTurn, DELAY); return; }
     if (wasDouble && !interrupted && !player.stuck) {
       log(`✨ 더블! ${player.name} 한 번 더 굴립니다.`);
       phase = 'idle';
@@ -702,7 +736,7 @@ function resolveTile(player, wasDouble) {
       log(`💸 ${player.name}, 재산세 ${amt}만원 납부. (자산 ${netWorth(player)}만원의 ${Math.round(TAX_RATE * 100)}%)`);
       SFX.tax();
       chargePlayer(player, amt, { toPot: true });
-      if (phase !== 'gameover') {
+      if (!player.eliminated) {
         const burnAmt = Math.round(player.cash * 0.5);
         player.cash -= burnAmt;
         log(`🔥 ${player.name}, 남은 현금의 절반 ${burnAmt}만원이 그대로 소각되었습니다!`);
@@ -765,17 +799,21 @@ function resolveTile(player, wasDouble) {
     case 'compound':
       if (tile.owner === null) {
         if (player.isBot) {
-          const buffer = 250;
-          if (player.cash - tile.price >= buffer) {
-            player.cash -= tile.price;
-            tile.owner = player.idx; tile.hits = 0;
-            log(`🏪 봇이 ${tile.name} 매입! (-${tile.price}만원)`);
-            SFX.buy();
-          } else {
-            log(`🏪 봇이 ${tile.name} 매입을 포기했습니다.`);
-          }
-          render();
-          afterResolve();
+          botThinking = true; render();
+          schedule(() => {
+            botThinking = false;
+            const buffer = 250;
+            if (player.cash - tile.price >= buffer) {
+              player.cash -= tile.price;
+              tile.owner = player.idx; tile.hits = 0;
+              log(`🏪 ${player.name}, ${tile.name} 매입! (-${tile.price}만원)`);
+              SFX.buy();
+            } else {
+              log(`🏪 ${player.name}, ${tile.name} 매입을 포기했습니다.`);
+            }
+            render();
+            afterResolve();
+          }, thinkDelay());
         } else {
           phase = 'awaiting-buy';
           renderActions();
@@ -798,17 +836,21 @@ function resolveTile(player, wasDouble) {
     case 'trust':
       if (tile.owner === null) {
         if (player.isBot) {
-          const buffer = 250;
-          if (player.cash - tile.price >= buffer) {
-            player.cash -= tile.price;
-            tile.owner = player.idx;
-            log(`📈 봇이 ${tile.name} 매입! (-${tile.price}만원, 한 바퀴마다 +${trustDividend(tile)}만원 배당)`);
-            SFX.buy();
-          } else {
-            log(`📈 봇이 ${tile.name} 매입을 포기했습니다.`);
-          }
-          render();
-          afterResolve();
+          botThinking = true; render();
+          schedule(() => {
+            botThinking = false;
+            const buffer = 250;
+            if (player.cash - tile.price >= buffer) {
+              player.cash -= tile.price;
+              tile.owner = player.idx;
+              log(`📈 ${player.name}, ${tile.name} 매입! (-${tile.price}만원, 한 바퀴마다 +${trustDividend(tile)}만원 배당)`);
+              SFX.buy();
+            } else {
+              log(`📈 ${player.name}, ${tile.name} 매입을 포기했습니다.`);
+            }
+            render();
+            afterResolve();
+          }, thinkDelay());
         } else {
           phase = 'awaiting-buy';
           renderActions();
@@ -825,18 +867,22 @@ function resolveTile(player, wasDouble) {
     case 'city':
       if (tile.owner === null) {
         if (player.isBot) {
-          const buffer = 250;
-          if (player.cash - tile.price >= buffer) {
-            player.cash -= tile.price;
-            tile.owner = player.idx; tile.stars = 0; tile.stageLap = player.lapCount;
-            log(`🏙️ 봇이 ${tile.name} 매입! (-${tile.price}만원)`);
-            SFX.buy();
-            maybeCelebrateMonopoly(player, tile, () => { render(); afterResolve(); });
-          } else {
-            log(`🏙️ 봇이 ${tile.name} 매입을 포기했습니다.`);
-            render();
-            afterResolve();
-          }
+          botThinking = true; render();
+          schedule(() => {
+            botThinking = false;
+            const buffer = 250;
+            if (player.cash - tile.price >= buffer) {
+              player.cash -= tile.price;
+              tile.owner = player.idx; tile.stars = 0; tile.stageLap = player.lapCount;
+              log(`🏙️ ${player.name}, ${tile.name} 매입! (-${tile.price}만원)`);
+              SFX.buy();
+              maybeCelebrateMonopoly(player, tile, () => { render(); afterResolve(); });
+            } else {
+              log(`🏙️ ${player.name}, ${tile.name} 매입을 포기했습니다.`);
+              render();
+              afterResolve();
+            }
+          }, thinkDelay());
         } else {
           phase = 'awaiting-buy';
           renderActions();
@@ -850,18 +896,22 @@ function resolveTile(player, wasDouble) {
         if (canBuildNext) {
           const cost = buildCost(tile);
           if (player.isBot) {
-            const buffer = 250;
-            if (player.cash - cost >= buffer) {
-              player.cash -= cost;
-              tile.stars++;
-              tile.stageLap = player.lapCount;
-              log(`🏗️ 봇이 ${tile.name}에 건설! (${tierName(tile)}, -${cost}만원, 통행료 ${getToll(tile)}만원)`);
-              SFX.build();
-            } else {
-              log(`${player.name}, 본인 소유의 ${tile.name} 도착. (건설 자금 부족)`);
-            }
-            render();
-            afterResolve();
+            botThinking = true; render();
+            schedule(() => {
+              botThinking = false;
+              const buffer = 250;
+              if (player.cash - cost >= buffer) {
+                player.cash -= cost;
+                tile.stars++;
+                tile.stageLap = player.lapCount;
+                log(`🏗️ ${player.name}, ${tile.name}에 건설! (${tierName(tile)}, -${cost}만원, 통행료 ${getToll(tile)}만원)`);
+                SFX.build();
+              } else {
+                log(`${player.name}, 본인 소유의 ${tile.name} 도착. (건설 자금 부족)`);
+              }
+              render();
+              afterResolve();
+            }, thinkDelay());
           } else {
             phase = 'awaiting-build';
             renderActions();
@@ -870,18 +920,22 @@ function resolveTile(player, wasDouble) {
         } else if (landmarkEligible) {
           const cost = landmarkCost(tile);
           if (player.isBot) {
-            const buffer = 300;
-            if (player.cash - cost >= buffer) {
-              player.cash -= cost;
-              tile.landmark = true;
-              tile.stageLap = player.lapCount;
-              log(`👑 봇이 ${tile.name}에 ${tile.landmarkName}${tile.landmarkIcon}을(를) 건설했습니다! (-${cost}만원, 이제 인수 불가)`);
-              SFX.landmark();
-            } else {
-              log(`${player.name}, 본인 소유의 ${tile.name} 도착. (랜드마크 자금 부족)`);
-            }
-            render();
-            afterResolve();
+            botThinking = true; render();
+            schedule(() => {
+              botThinking = false;
+              const buffer = 300;
+              if (player.cash - cost >= buffer) {
+                player.cash -= cost;
+                tile.landmark = true;
+                tile.stageLap = player.lapCount;
+                log(`👑 ${player.name}, ${tile.name}에 ${tile.landmarkName}${tile.landmarkIcon}을(를) 건설했습니다! (-${cost}만원, 이제 인수 불가)`);
+                SFX.landmark();
+              } else {
+                log(`${player.name}, 본인 소유의 ${tile.name} 도착. (랜드마크 자금 부족)`);
+              }
+              render();
+              afterResolve();
+            }, thinkDelay());
           } else {
             phase = 'awaiting-landmark';
             renderActions();
@@ -901,34 +955,38 @@ function resolveTile(player, wasDouble) {
           chargePlayer(player, toll, { toPlayer: owner });
           afterResolve();
         } else if (player.isBot) {
-          const buffer = 300;
-          const acq = acquireTotalCost(tile);
-          if (tile.stars > 0 && player.cash - acq >= buffer) {
-            chargePlayer(player, acq, { toPlayer: owner });
-            tile.owner = player.idx;
-            tile.stageLap = player.lapCount;
-            log(`🏆 봇이 ${owner.name} 소유 ${tile.name}을(를) 인수했습니다! (통행료 포함 -${acq}만원)`);
-            SFX.buy();
-            maybeCelebrateMonopoly(player, tile, () => {
-              if (tile.stars < 5) {
-                const bCost = buildCost(tile);
-                if (player.cash - bCost >= 250) {
-                  player.cash -= bCost;
-                  tile.stars++;
-                  tile.stageLap = player.lapCount;
-                  log(`🏗️ 봇이 인수 직후 ${tile.name} 추가 건설! (${tierName(tile)}, -${bCost}만원, 통행료 ${getToll(tile)}만원)`);
-                  SFX.build();
-                  render();
+          botThinking = true; render();
+          schedule(() => {
+            botThinking = false;
+            const buffer = 300;
+            const acq = acquireTotalCost(tile);
+            if (tile.stars > 0 && player.cash - acq >= buffer) {
+              chargePlayer(player, acq, { toPlayer: owner });
+              tile.owner = player.idx;
+              tile.stageLap = player.lapCount;
+              log(`🏆 ${player.name}, ${owner.name} 소유 ${tile.name}을(를) 인수했습니다! (통행료 포함 -${acq}만원)`);
+              SFX.buy();
+              maybeCelebrateMonopoly(player, tile, () => {
+                if (tile.stars < 5) {
+                  const bCost = buildCost(tile);
+                  if (player.cash - bCost >= 250) {
+                    player.cash -= bCost;
+                    tile.stars++;
+                    tile.stageLap = player.lapCount;
+                    log(`🏗️ ${player.name}, 인수 직후 ${tile.name} 추가 건설! (${tierName(tile)}, -${bCost}만원, 통행료 ${getToll(tile)}만원)`);
+                    SFX.build();
+                    render();
+                  }
                 }
-              }
+                afterResolve();
+              });
+            } else {
+              log(`🏙️ ${player.name}, ${owner.name} 소유 ${tile.name} 도착. 통행료 ${toll}만원 지불.`);
+              SFX.pay();
+              chargePlayer(player, toll, { toPlayer: owner });
               afterResolve();
-            });
-          } else {
-            log(`🏙️ ${player.name}, ${owner.name} 소유 ${tile.name} 도착. 통행료 ${toll}만원 지불.`);
-            SFX.pay();
-            chargePlayer(player, toll, { toPlayer: owner });
-            afterResolve();
-          }
+            }
+          }, thinkDelay());
         } else {
           phase = 'awaiting-toll-choice';
           renderActions();
@@ -1082,7 +1140,9 @@ function skipPostAcquireBuild() {
 
 function switchTurn() {
   if (phase === 'gameover') return;
-  current = 1 - current;
+  do {
+    current = (current + 1) % players.length;
+  } while (players[current].eliminated);
   startTurn(current);
 }
 
@@ -1123,12 +1183,18 @@ function createBoard() {
 }
 
 function render() {
+  for (let i = 0; i < 4; i++) {
+    const card = document.getElementById('pcard' + i);
+    if (card) card.style.display = i < players.length ? '' : 'none';
+  }
   players.forEach((p, i) => {
+    const nameEl = document.querySelector('#pcard' + i + ' .name');
+    if (nameEl) nameEl.textContent = (p.isBot ? '🤖 ' : '🧑 ') + p.name + (p.eliminated ? ' 💀' : '');
     document.getElementById('cash' + i).textContent = fmt(p.cash);
     const owned = TILES.filter(t => t && t.owner === i &&
       (t.type === 'city' || t.type === 'compound' || t.type === 'trust'));
     const totalValue = owned.reduce((sum, t) => sum + assetValue(t), 0);
-    document.getElementById('props' + i).textContent = `보유 자산 ${owned.length}개 (${fmt(totalValue)})` + (p.stuck ? ` · 🏝️무인도(${p.jailTurns}/2)` : '');
+    document.getElementById('props' + i).textContent = p.eliminated ? '탈락' : `보유 자산 ${owned.length}개 (${fmt(totalValue)})` + (p.stuck ? ` · 🏝️무인도(${p.jailTurns}/2)` : '');
     document.getElementById('pcard' + i).classList.toggle('turn', current === i && phase !== 'gameover');
   });
 
@@ -1145,7 +1211,7 @@ function render() {
       el.classList.toggle('monopoly', isMonopoly);
       tollEl.textContent = '💸' + (tile.owner !== null ? getToll(tile) : tile.tollBase);
       if (tile.owner !== null) {
-        strip.style.background = tile.owner === 0 ? '#60a5fa' : '#f472b6';
+        strip.style.background = PLAYER_COLORS[tile.owner];
         stageEl.textContent = tile.landmark ? tile.landmarkIcon : (tile.stars > 0 ? '★'.repeat(tile.stars) : '');
       } else {
         strip.style.background = 'transparent';
@@ -1161,7 +1227,7 @@ function render() {
         tollEl.textContent = '';
       }
       if (tile.owner !== null) {
-        strip.style.background = tile.owner === 0 ? '#60a5fa' : '#f472b6';
+        strip.style.background = PLAYER_COLORS[tile.owner];
         stageEl.textContent = tile.type === 'compound'
           ? `×${2 ** Math.min(tile.hits, COMPOUND_TOLL_CAP_HITS)}`
           : `+${trustDividend(tile)}`;
@@ -1174,10 +1240,10 @@ function render() {
     if (tok) {
       tok.innerHTML = '';
       players.forEach((p, pi) => {
-        if (p.pos === i) {
+        if (p.pos === i && !p.eliminated) {
           const s = document.createElement('div');
           s.className = 'tok p' + pi;
-          s.textContent = pi === 0 ? 'P' : 'B';
+          s.textContent = pi === 0 ? 'P' : String(pi);
           tok.appendChild(s);
         }
       });
@@ -1187,7 +1253,7 @@ function render() {
   document.getElementById('pot').textContent = `중앙기금 💰 ${pot}만원`;
   const p = players[current];
   document.getElementById('turnLabel').textContent = phase === 'gameover' ? '게임 종료' :
-    (p.isBot ? '🤖 봇의 턴' : '🧑 내 턴');
+    (p.isBot ? `🤖 ${p.name}의 턴` + (botThinking ? ' · 생각 중...' : '') : '🧑 내 턴');
 
   renderActions();
 }
@@ -1346,9 +1412,25 @@ function renderActions() {
 function openRules() { ensureAudio(); SFX.click(); document.getElementById('rulesModal').classList.remove('hidden'); }
 function closeRules() { SFX.click(); document.getElementById('rulesModal').classList.add('hidden'); }
 
+function updateBotCountUI() {
+  document.querySelectorAll('.botCountBtn').forEach(btn => {
+    btn.classList.toggle('active', Number(btn.dataset.count) === botCount);
+  });
+}
+
 createBoard();
 document.getElementById('restartBtn').onclick = () => { ensureAudio(); SFX.click(); initGame(); };
 document.getElementById('rulesBtn').onclick = openRules;
 document.getElementById('rulesCloseBtn').onclick = closeRules;
 document.getElementById('muteBtn').onclick = toggleMute;
+document.querySelectorAll('.botCountBtn').forEach(btn => {
+  btn.onclick = () => {
+    ensureAudio();
+    SFX.click();
+    botCount = Number(btn.dataset.count);
+    updateBotCountUI();
+    initGame();
+  };
+});
+updateBotCountUI();
 initGame();
