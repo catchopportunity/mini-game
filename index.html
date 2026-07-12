@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<title>Neon Breaker</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: radial-gradient(circle at 50% 20%, #1b1035 0%, #0a0714 70%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    overflow: hidden;
+  }
+  #wrap {
+    position: relative;
+  }
+  canvas {
+    background: #0a0714;
+    display: block;
+    border-radius: 12px;
+    box-shadow: 0 0 40px rgba(120, 80, 255, 0.35), 0 0 0 1px rgba(255,255,255,0.06);
+  }
+  #hud {
+    position: absolute;
+    top: 14px;
+    left: 18px;
+    right: 18px;
+    display: flex;
+    justify-content: space-between;
+    color: #cfc6ff;
+    font-size: 15px;
+    letter-spacing: 0.05em;
+    pointer-events: none;
+    text-shadow: 0 0 8px rgba(150,120,255,0.6);
+  }
+  #overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    color: #fff;
+    background: rgba(10, 7, 20, 0.72);
+    border-radius: 12px;
+    text-align: center;
+    transition: opacity 0.25s ease;
+  }
+  #overlay h1 {
+    font-size: 28px;
+    margin: 0;
+    background: linear-gradient(90deg, #a78bfa, #f472b6, #60a5fa);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  #overlay p {
+    margin: 0;
+    color: #b9b0dd;
+    font-size: 14px;
+  }
+  #overlay .key {
+    display: inline-block;
+    padding: 2px 8px;
+    border: 1px solid rgba(255,255,255,0.3);
+    border-radius: 6px;
+    margin: 0 2px;
+    font-size: 12px;
+  }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="hud">
+    <span id="score">SCORE 0</span>
+    <span id="lives">♥ ♥ ♥</span>
+  </div>
+  <canvas id="game" width="480" height="640"></canvas>
+  <div id="overlay">
+    <h1>NEON BREAKER</h1>
+    <p><span class="key">←</span><span class="key">→</span> 또는 마우스로 패들 이동</p>
+    <p><span class="key">SPACE</span> 시작 / 발사</p>
+  </div>
+</div>
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+const scoreEl = document.getElementById('score');
+const livesEl = document.getElementById('lives');
+const overlay = document.getElementById('overlay');
+
+const COLORS = ['#f472b6', '#a78bfa', '#60a5fa', '#34d399', '#fbbf24'];
+
+let paddle, ball, bricks, score, lives, level, running, particles;
+
+function initLevel(lv) {
+  const rows = 4 + Math.min(lv, 3);
+  const cols = 8;
+  const brickW = 48, brickH = 18, gap = 6;
+  const offsetX = (W - (cols * (brickW + gap) - gap)) / 2;
+  const offsetY = 60;
+  bricks = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      bricks.push({
+        x: offsetX + c * (brickW + gap),
+        y: offsetY + r * (brickH + gap),
+        w: brickW, h: brickH,
+        alive: true,
+        color: COLORS[r % COLORS.length],
+        hp: r < 2 ? 1 : 2
+      });
+    }
+  }
+}
+
+function resetBall() {
+  ball = {
+    x: W / 2, y: H - 70,
+    r: 7,
+    vx: 0, vy: 0,
+    stuck: true,
+    speed: 5.4 + level * 0.35
+  };
+}
+
+function newGame() {
+  paddle = { w: 90, h: 12, x: W / 2 - 45, y: H - 40, speed: 8 };
+  score = 0; lives = 3; level = 0; particles = [];
+  initLevel(level);
+  resetBall();
+  running = false;
+  updateHud();
+}
+
+function updateHud() {
+  scoreEl.textContent = 'SCORE ' + score;
+  livesEl.textContent = '♥ '.repeat(Math.max(lives, 0)).trim();
+}
+
+function spawnParticles(x, y, color) {
+  for (let i = 0; i < 10; i++) {
+    particles.push({
+      x, y,
+      vx: (Math.random() - 0.5) * 6,
+      vy: (Math.random() - 0.5) * 6,
+      life: 1,
+      color
+    });
+  }
+}
+
+const keys = {};
+document.addEventListener('keydown', e => {
+  keys[e.key] = true;
+  if (e.key === ' ') {
+    e.preventDefault();
+    if (!running) startRound();
+    else if (ball.stuck) launchBall();
+  }
+});
+document.addEventListener('keyup', e => keys[e.key] = false);
+
+canvas.addEventListener('mousemove', e => {
+  const rect = canvas.getBoundingClientRect();
+  const mx = (e.clientX - rect.left) * (W / rect.width);
+  paddle.x = Math.min(Math.max(mx - paddle.w / 2, 0), W - paddle.w);
+});
+canvas.addEventListener('click', () => {
+  if (!running) startRound();
+  else if (ball.stuck) launchBall();
+});
+
+function startRound() {
+  overlay.classList.add('hidden');
+  running = true;
+}
+
+function launchBall() {
+  ball.stuck = false;
+  const angle = -Math.PI / 2 + (Math.random() - 0.5) * 0.6;
+  ball.vx = Math.cos(angle) * ball.speed;
+  ball.vy = Math.sin(angle) * ball.speed;
+}
+
+function showOverlay(title, sub) {
+  overlay.querySelector('h1').textContent = title;
+  overlay.querySelector('p').innerHTML = sub;
+  const secondP = overlay.querySelectorAll('p')[1];
+  if (secondP) secondP.remove();
+  overlay.classList.remove('hidden');
+  running = false;
+}
+
+function loseLife() {
+  lives--;
+  updateHud();
+  if (lives <= 0) {
+    showOverlay('GAME OVER', `점수 ${score}점 · <span class="key">SPACE</span>로 재도전`);
+    newGame();
+  } else {
+    resetBall();
+  }
+}
+
+function nextLevel() {
+  level++;
+  initLevel(level);
+  resetBall();
+  showOverlay('LEVEL ' + (level + 1), `<span class="key">SPACE</span>로 계속`);
+}
+
+function update() {
+  if (!running) return;
+
+  if (keys['ArrowLeft']) paddle.x -= paddle.speed;
+  if (keys['ArrowRight']) paddle.x += paddle.speed;
+  paddle.x = Math.min(Math.max(paddle.x, 0), W - paddle.w);
+
+  if (ball.stuck) {
+    ball.x = paddle.x + paddle.w / 2;
+    ball.y = paddle.y - ball.r - 2;
+  } else {
+    ball.x += ball.vx;
+    ball.y += ball.vy;
+
+    if (ball.x - ball.r < 0) { ball.x = ball.r; ball.vx *= -1; }
+    if (ball.x + ball.r > W) { ball.x = W - ball.r; ball.vx *= -1; }
+    if (ball.y - ball.r < 0) { ball.y = ball.r; ball.vy *= -1; }
+
+    if (ball.y + ball.r > paddle.y && ball.y + ball.r < paddle.y + paddle.h + 8 &&
+        ball.x > paddle.x - ball.r && ball.x < paddle.x + paddle.w + ball.r && ball.vy > 0) {
+      const hitPos = (ball.x - (paddle.x + paddle.w / 2)) / (paddle.w / 2);
+      const angle = hitPos * (Math.PI / 3) - Math.PI / 2;
+      ball.vx = Math.cos(angle) * ball.speed;
+      ball.vy = Math.sin(angle) * ball.speed;
+    }
+
+    if (ball.y - ball.r > H) {
+      loseLife();
+    }
+
+    for (const b of bricks) {
+      if (!b.alive) continue;
+      if (ball.x + ball.r > b.x && ball.x - ball.r < b.x + b.w &&
+          ball.y + ball.r > b.y && ball.y - ball.r < b.y + b.h) {
+        b.hp--;
+        if (b.hp <= 0) {
+          b.alive = false;
+          spawnParticles(b.x + b.w / 2, b.y + b.h / 2, b.color);
+        }
+        score += 10;
+        updateHud();
+        const overlapX = Math.min(ball.x + ball.r - b.x, b.x + b.w - (ball.x - ball.r));
+        const overlapY = Math.min(ball.y + ball.r - b.y, b.y + b.h - (ball.y - ball.r));
+        if (overlapX < overlapY) ball.vx *= -1; else ball.vy *= -1;
+        break;
+      }
+    }
+
+    if (bricks.every(b => !b.alive)) nextLevel();
+  }
+
+  for (const p of particles) {
+    p.x += p.vx; p.y += p.vy; p.life -= 0.03;
+  }
+  particles = particles.filter(p => p.life > 0);
+}
+
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+
+  for (const b of bricks) {
+    if (!b.alive) continue;
+    ctx.fillStyle = b.color;
+    ctx.globalAlpha = b.hp > 1 ? 1 : 0.75;
+    ctx.shadowColor = b.color;
+    ctx.shadowBlur = 12;
+    ctx.fillRect(b.x, b.y, b.w, b.h);
+    ctx.globalAlpha = 1;
+    ctx.shadowBlur = 0;
+  }
+
+  for (const p of particles) {
+    ctx.globalAlpha = Math.max(p.life, 0);
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x, p.y, 3, 3);
+    ctx.globalAlpha = 1;
+  }
+
+  ctx.fillStyle = '#e5e0ff';
+  ctx.shadowColor = '#a78bfa';
+  ctx.shadowBlur = 14;
+  ctx.fillRect(paddle.x, paddle.y, paddle.w, paddle.h);
+
+  ctx.beginPath();
+  ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2);
+  ctx.fillStyle = '#fff';
+  ctx.shadowColor = '#fff';
+  ctx.shadowBlur = 16;
+  ctx.fill();
+  ctx.shadowBlur = 0;
+}
+
+function loop() {
+  update();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+newGame();
+loop();
+</script>
+</body>
+</html>
