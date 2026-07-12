@@ -523,25 +523,58 @@ function diceForSum(sum) {
   return [d1, sum - d1];
 }
 
-function rollForCurrent() {
+// 주사위 버튼을 오래 누를수록(최대 CHARGE_MAX_MS) chargeLevel(0~1)이 커짐.
+// 0이면 공정한 1d6과 완전히 동일 — 안 누르고 그냥 클릭해도 손해는 없음.
+// 릴리즈 타이밍에 약간의 흔들림(CHARGE_WOBBLE)을 더해 완벽한 정밀 조작은 불가능하게 함.
+const CHARGE_MAX_MS = 1400;
+const CHARGE_WOBBLE = 0.12;
+function chargedDie(chargeLevel) {
+  const wobble = (Math.random() * 2 - 1) * CHARGE_WOBBLE;
+  const t = Math.min(1, Math.max(0, chargeLevel + wobble));
+  const exponent = 1 - t * 0.65; // 1.0(공정) → 0.35(높은 눈으로 강하게 편향)
+  return 1 + Math.floor(6 * Math.pow(Math.random(), exponent));
+}
+
+let chargeState = null;
+function startCharge(meterFill) {
+  if (chargeState) return;
+  const startTime = performance.now();
+  const tick = () => {
+    if (!chargeState) return;
+    const pct = Math.min(1, (performance.now() - startTime) / CHARGE_MAX_MS);
+    meterFill.style.width = (pct * 100) + '%';
+    chargeState.raf = requestAnimationFrame(tick);
+  };
+  chargeState = { startTime, raf: requestAnimationFrame(tick) };
+}
+function releaseCharge() {
+  if (!chargeState) return 0;
+  const level = Math.min(1, (performance.now() - chargeState.startTime) / CHARGE_MAX_MS);
+  cancelAnimationFrame(chargeState.raf);
+  chargeState = null;
+  return level;
+}
+
+function rollForCurrent(chargeLevel = 0) {
   if (phase !== 'idle') return;
   phase = 'rolling';
   const p = players[current];
-  let d1 = 1 + Math.floor(Math.random() * 6);
-  let d2 = 1 + Math.floor(Math.random() * 6);
+  let d1 = p.isBot ? 1 + Math.floor(Math.random() * 6) : chargedDie(chargeLevel);
+  let d2 = p.isBot ? 1 + Math.floor(Math.random() * 6) : chargedDie(chargeLevel);
+  const chargeTag = (!p.isBot && chargeLevel > 0.05) ? ` [차지 ${Math.round(Math.min(1, chargeLevel) * 100)}%]` : '';
 
   if (p.stuck) {
     document.getElementById('diceDisplay').textContent = `🎲 ${d1} + ${d2} = ${d1 + d2}`;
     SFX.dice();
     if (d1 === d2) {
       p.stuck = false; p.jailTurns = 0;
-      log(`🎲 ${p.name}: ${d1} + ${d2} = ${d1 + d2} (더블!) 🏝️ 무인도 탈출!`);
+      log(`🎲 ${p.name}: ${d1} + ${d2} = ${d1 + d2}${chargeTag} (더블!) 🏝️ 무인도 탈출!`);
       setTimeout(SFX.doubleDing, 150);
       // 탈출 굴림으로 이동은 하지만, 더블이어도 추가 굴림 보너스는 없음
       movePlayerBy(p, d1 + d2, () => resolveTile(p, false));
     } else {
       p.jailTurns++;
-      log(`🎲 ${p.name}: ${d1} + ${d2} = ${d1 + d2}. 탈출 실패... (대기 ${p.jailTurns}/2턴)`);
+      log(`🎲 ${p.name}: ${d1} + ${d2} = ${d1 + d2}${chargeTag}. 탈출 실패... (대기 ${p.jailTurns}/2턴)`);
       SFX.jail();
       render();
       schedule(switchTurn, DELAY);
@@ -557,7 +590,7 @@ function rollForCurrent() {
     }
   }
   document.getElementById('diceDisplay').textContent = `🎲 ${d1} + ${d2} = ${d1 + d2}`;
-  log(`🎲 ${p.name}: ${d1} + ${d2} = ${d1 + d2}` + (d1 === d2 ? ' (더블!)' : ''));
+  log(`🎲 ${p.name}: ${d1} + ${d2} = ${d1 + d2}${chargeTag}` + (d1 === d2 ? ' (더블!)' : ''));
   SFX.dice();
   if (d1 === d2) setTimeout(SFX.doubleDing, 150);
   renderActions();
@@ -1273,9 +1306,40 @@ function renderActions() {
       promptBox.textContent = `🏝️ 무인도에 갇혔습니다! 더블이 나오면 탈출 (실패 ${p.jailTurns}/2턴, 2턴 차면 강제 석방)`;
     }
     const rollBtn = document.createElement('button');
-    rollBtn.textContent = p.stuck ? '🎲 탈출 시도' : '🎲 주사위 굴리기';
-    rollBtn.onclick = () => { ensureAudio(); rollForCurrent(); };
+    rollBtn.id = 'rollBtn';
+    rollBtn.textContent = p.stuck ? '🎲 탈출 시도 (누르고 있으면 강해짐)' : '🎲 주사위 굴리기 (누르고 있으면 강해짐)';
+    const meter = document.createElement('div');
+    meter.id = 'chargeMeter';
+    const meterFill = document.createElement('div');
+    meterFill.id = 'chargeMeterFill';
+    meter.appendChild(meterFill);
+
+    let handledByPointer = false;
+    const onDown = (e) => {
+      e.preventDefault();
+      ensureAudio();
+      if (rollBtn.setPointerCapture) { try { rollBtn.setPointerCapture(e.pointerId); } catch (err) {} }
+      startCharge(meterFill);
+    };
+    const onUp = () => {
+      if (!chargeState) return;
+      const level = releaseCharge();
+      meterFill.style.width = '0%';
+      handledByPointer = true;
+      rollForCurrent(level);
+    };
+    // 포인터(마우스/터치)는 pointerup에서 처리. 키보드/접근성 활성화는 pointerdown/up 없이
+    // click만 발생하므로, 그 경우엔 차지 없이(레벨 0) 굴리도록 폴백.
+    const onClick = () => {
+      if (handledByPointer) { handledByPointer = false; return; }
+      rollForCurrent(0);
+    };
+    rollBtn.addEventListener('pointerdown', onDown);
+    rollBtn.addEventListener('pointerup', onUp);
+    rollBtn.addEventListener('pointercancel', onUp);
+    rollBtn.addEventListener('click', onClick);
     actionRow.appendChild(rollBtn);
+    actionRow.appendChild(meter);
   }
 }
 

@@ -152,6 +152,22 @@ button {
 button:disabled { opacity: 0.35; cursor: default; }
 button.secondary { background: rgba(255,255,255,0.1); color: #e5e0ff; }
 #actionRow { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; max-width: min(320px, 84vw); }
+#rollBtn { touch-action: none; user-select: none; }
+#chargeMeter {
+  width: min(220px, 70vw);
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(255,255,255,0.1);
+  overflow: hidden;
+  flex-basis: 100%;
+}
+#chargeMeterFill {
+  height: 100%;
+  width: 0%;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #60a5fa, #f472b6, #fbbf24);
+  transition: width 0.05s linear;
+}
 #promptBox {
   background: rgba(255,255,255,0.06);
   border: 1px solid rgba(255,255,255,0.15);
