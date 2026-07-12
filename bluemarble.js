@@ -261,12 +261,14 @@ function tierName(tile) {
 // 통행료 단계: 그룹독점만 2배 / ★1=4배 / ★2=8배 / ★3=16배 / 랜드마크=30배
 function getToll(tile) {
   const base = tile.tollBase;
-  if (tile.landmark) return Math.round(base * 30);
-  if (tile.stars === 1) return Math.round(base * 4);
-  if (tile.stars === 2) return Math.round(base * 8);
-  if (tile.stars === 3) return Math.round(base * 16);
-  if (groupFullyOwned(tile.owner, tile.group)) return base * 2;
-  return base;
+  let mult;
+  if (tile.landmark) mult = 30;
+  else if (tile.stars === 3) mult = 16;
+  else if (tile.stars === 2) mult = 8;
+  else if (tile.stars === 1) mult = 4;
+  else mult = 1;
+  if (groupFullyOwned(tile.owner, tile.group)) mult *= 2; // 독점은 건설 단계와 곱연산으로 중첩
+  return Math.round(base * mult);
 }
 
 function buildCost(tile) {
