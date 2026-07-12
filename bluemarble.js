@@ -145,10 +145,10 @@ const GOLDENKEY_IDX = [3, 23, 33];
 const COMPOUND_IDX = [13];   // 복리 상가: 방문할 때마다 통행료가 배로 뛴다
 const TRUST_IDX = [26];      // 투자 신탁: 통행료는 없지만 한 바퀴마다 배당금을 준다
 const CASINO_IDX = [6];      // 카지노: 즉석에서 베팅 도박
-const COMPOUND_TOLL_CAP_HITS = 5; // 통행료 배증은 최대 32배까지만
+const COMPOUND_TOLL_CAP_HITS = 9; // 통행료 배증은 최대 512배까지만
 const TRUST_DIVIDEND_RATE = 0.15;
 const SALARY = 500;
-const TIER_NAMES = ['빈 땅', '별장', '빌딩', '호텔'];
+const TIER_NAMES = ['빈 땅', '별장', '빌딩', '호텔', '리조트', '마천루'];
 
 const TILES = [];
 for (let i = 0; i < 40; i++) TILES.push(null);
@@ -192,7 +192,7 @@ const CARDS = [
   { text: p => `투자 배당 수익! +${gainAmount(p, 0.08)}만원 획득`, fn: p => { p.cash += gainAmount(p, 0.08); } },
   { text: p => `벌금 고지서 도착! -${payAmount(p, 0.05)}만원 납부`, fn: p => { const amt = payAmount(p, 0.05); spend(p, amt); pot += amt; } },
   { text: '무료 리모델링 쿠폰! 보유 도시 중 하나가 무료로 업그레이드됩니다.', fn: p => {
-      const candidates = TILES.filter(t => t && t.type === 'city' && t.owner === p.idx && t.stars < 3);
+      const candidates = TILES.filter(t => t && t.type === 'city' && t.owner === p.idx && t.stars < 5);
       if (candidates.length) {
         const t = candidates[Math.floor(Math.random() * candidates.length)];
         t.stars++;
@@ -259,14 +259,12 @@ function tierName(tile) {
 }
 
 // 통행료 단계: 그룹독점만 2배 / ★1=4배 / ★2=8배 / ★3=16배 / 랜드마크=30배
+const STAR_TOLL_MULT = [1, 4, 8, 16, 32, 64]; // 인덱스 = stars(0~5)
+const LANDMARK_TOLL_MULT = 120; // 독점 곱하면 240배
+
 function getToll(tile) {
   const base = tile.tollBase;
-  let mult;
-  if (tile.landmark) mult = 30;
-  else if (tile.stars === 3) mult = 16;
-  else if (tile.stars === 2) mult = 8;
-  else if (tile.stars === 1) mult = 4;
-  else mult = 1;
+  let mult = tile.landmark ? LANDMARK_TOLL_MULT : STAR_TOLL_MULT[tile.stars];
   if (groupFullyOwned(tile.owner, tile.group)) mult *= 2; // 독점은 건설 단계와 곱연산으로 중첩
   return Math.round(base * mult);
 }
@@ -780,8 +778,8 @@ function resolveTile(player, wasDouble) {
       } else if (tile.owner === player.idx) {
         // 색깔 그룹 독점 여부와 무관하게, 마지막 건설 이후 한 바퀴를 돌고 다시 착지하면 다음 단계 건설 가능
         const lapCleared = player.lapCount > tile.stageLap;
-        const canBuildNext = tile.stars < 3 && lapCleared;
-        const landmarkEligible = tile.stars === 3 && !tile.landmark && lapCleared;
+        const canBuildNext = tile.stars < 5 && lapCleared;
+        const landmarkEligible = tile.stars === 5 && !tile.landmark && lapCleared;
         if (canBuildNext) {
           const cost = buildCost(tile);
           if (player.isBot) {
@@ -844,7 +842,20 @@ function resolveTile(player, wasDouble) {
             tile.stageLap = player.lapCount;
             log(`🏆 봇이 ${owner.name} 소유 ${tile.name}을(를) 인수했습니다! (통행료 포함 -${acq}만원)`);
             SFX.buy();
-            maybeCelebrateMonopoly(player, tile, afterResolve);
+            maybeCelebrateMonopoly(player, tile, () => {
+              if (tile.stars < 5) {
+                const bCost = buildCost(tile);
+                if (player.cash - bCost >= 250) {
+                  player.cash -= bCost;
+                  tile.stars++;
+                  tile.stageLap = player.lapCount;
+                  log(`🏗️ 봇이 인수 직후 ${tile.name} 추가 건설! (${tierName(tile)}, -${bCost}만원, 통행료 ${getToll(tile)}만원)`);
+                  SFX.build();
+                  render();
+                }
+              }
+              afterResolve();
+            });
           } else {
             log(`🏙️ ${player.name}, ${owner.name} 소유 ${tile.name} 도착. 통행료 ${toll}만원 지불.`);
             SFX.pay();
@@ -968,7 +979,37 @@ function acquireCurrent() {
   log(`🏆 ${p.name}, ${owner.name} 소유 ${tile.name}을(를) 인수했습니다! (통행료 포함 -${cost}만원)`);
   SFX.buy();
   phase = 'resolving';
-  maybeCelebrateMonopoly(p, tile, finishPending);
+  maybeCelebrateMonopoly(p, tile, () => offerPostAcquireBuild(tile));
+}
+
+// 인수 직후엔 그 자리에서 바로 한 단계 추가 건설을 제안 (한 바퀴 대기 없이, 비용은 정상 지불)
+function offerPostAcquireBuild(tile) {
+  if (tile.type === 'city' && tile.stars < 5) {
+    phase = 'awaiting-post-build';
+    renderActions();
+  } else {
+    finishPending();
+  }
+}
+
+function buildPostAcquire() {
+  const p = players[current];
+  const tile = TILES[p.pos];
+  const cost = buildCost(tile);
+  if (p.cash < cost) return;
+  p.cash -= cost;
+  tile.stars++;
+  tile.stageLap = p.lapCount;
+  log(`🏗️ ${p.name}, 인수 직후 ${tile.name} 추가 건설! (${tierName(tile)}, -${cost}만원, 통행료 ${getToll(tile)}만원)`);
+  SFX.build();
+  phase = 'resolving';
+  finishPending();
+}
+
+function skipPostAcquireBuild() {
+  SFX.click();
+  phase = 'resolving';
+  finishPending();
 }
 
 function switchTurn() {
@@ -1132,11 +1173,31 @@ function renderActions() {
     return;
   }
 
+  if (phase === 'awaiting-post-build' && !p.isBot) {
+    const tile = TILES[p.pos];
+    const cost = buildCost(tile);
+    const nextTier = TIER_NAMES[tile.stars + 1];
+    const nextToll = getToll(Object.assign({}, tile, { stars: tile.stars + 1 }));
+    promptBox.style.display = 'block';
+    promptBox.textContent = `🏆 인수 기념! 한 바퀴 기다리지 않고 바로 ${nextTier}을(를) 건설하시겠습니까? (${cost}만원 → 통행료 ${nextToll}만원으로 상승)`;
+    const buildBtn = document.createElement('button');
+    buildBtn.textContent = '바로 건설';
+    buildBtn.disabled = p.cash < cost;
+    buildBtn.onclick = buildPostAcquire;
+    const skipBtn = document.createElement('button');
+    skipBtn.className = 'secondary';
+    skipBtn.textContent = '보류';
+    skipBtn.onclick = skipPostAcquireBuild;
+    actionRow.appendChild(buildBtn);
+    actionRow.appendChild(skipBtn);
+    return;
+  }
+
   if (phase === 'awaiting-landmark' && !p.isBot) {
     const tile = TILES[p.pos];
     const cost = landmarkCost(tile);
     promptBox.style.display = 'block';
-    promptBox.textContent = `${tile.landmarkIcon} ${tile.name}은 호텔을 다 지었고 한 바퀴를 돌았습니다! ${tile.landmarkName}(${cost}만원)을 건설하시겠습니까? (건설하면 이후 인수 불가)`;
+    promptBox.textContent = `${tile.landmarkIcon} ${tile.name}은 ${TIER_NAMES[5]}까지 다 지었고 한 바퀴를 돌았습니다! ${tile.landmarkName}(${cost}만원)을 건설하시겠습니까? (건설하면 이후 인수 불가)`;
     const buildBtn = document.createElement('button');
     buildBtn.textContent = `${tile.landmarkName} 건설`;
     buildBtn.disabled = p.cash < cost;
