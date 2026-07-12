@@ -23,7 +23,7 @@ h1 {
   letter-spacing: 0.05em;
 }
 #headerRow { display: flex; align-items: center; gap: 12px; }
-#rulesBtn { padding: 6px 12px; font-size: 12px; }
+#rulesBtn, #muteBtn { padding: 6px 12px; font-size: 12px; }
 #hud {
   display: flex;
   gap: 18px;

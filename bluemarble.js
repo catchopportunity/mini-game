@@ -2,6 +2,114 @@ const fmt = n => n.toLocaleString('ko-KR') + '만원';
 const DELAY = 750;
 const STEP_DELAY = 140;
 
+// ---------- Audio (synthesized, no external files) ----------
+let audioCtx = null;
+let masterGain = null;
+let muted = false;
+let bgmHandle = null;
+
+function ensureAudio() {
+  if (audioCtx) {
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    return;
+  }
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return;
+  audioCtx = new AC();
+  masterGain = audioCtx.createGain();
+  masterGain.gain.value = muted ? 0 : 0.5;
+  masterGain.connect(audioCtx.destination);
+  startBGM();
+}
+
+function toggleMute() {
+  ensureAudio();
+  muted = !muted;
+  if (masterGain) masterGain.gain.setTargetAtTime(muted ? 0 : 0.5, audioCtx.currentTime, 0.05);
+  const btn = document.getElementById('muteBtn');
+  if (btn) btn.textContent = muted ? '🔇' : '🔊';
+}
+
+function tone(freq, dur, opts = {}) {
+  if (!audioCtx) return;
+  const { type = 'sine', vol = 0.22, delay = 0, sweepTo = null } = opts;
+  const t0 = audioCtx.currentTime + delay;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, t0);
+  if (sweepTo) osc.frequency.exponentialRampToValueAtTime(sweepTo, t0 + dur);
+  gain.gain.setValueAtTime(0, t0);
+  gain.gain.linearRampToValueAtTime(vol, t0 + 0.008);
+  gain.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+  osc.connect(gain);
+  gain.connect(masterGain);
+  osc.start(t0);
+  osc.stop(t0 + dur + 0.02);
+}
+
+function noiseBurst(dur, opts = {}) {
+  if (!audioCtx) return;
+  const { vol = 0.2, delay = 0 } = opts;
+  const t0 = audioCtx.currentTime + delay;
+  const size = Math.max(1, Math.floor(audioCtx.sampleRate * dur));
+  const buffer = audioCtx.createBuffer(1, size, audioCtx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < size; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / size);
+  const src = audioCtx.createBufferSource();
+  src.buffer = buffer;
+  const gain = audioCtx.createGain();
+  gain.gain.setValueAtTime(vol, t0);
+  gain.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+  src.connect(gain);
+  gain.connect(masterGain);
+  src.start(t0);
+}
+
+// notes: [[freq, dur, gapAfter], ...] played back to back starting now
+function melody(notes, opts = {}) {
+  let t = 0;
+  notes.forEach(([freq, dur, gap = 0.02]) => {
+    tone(freq, dur, { ...opts, delay: t });
+    t += dur + gap;
+  });
+  return t;
+}
+
+const SFX = {
+  click: () => tone(600, 0.045, { type: 'square', vol: 0.1 }),
+  dice: () => { noiseBurst(0.12, { vol: 0.12 }); tone(180, 0.06, { type: 'square', vol: 0.08, delay: 0.05 }); },
+  doubleDing: () => melody([[1200, 0.05], [1600, 0.08]], { type: 'sine', vol: 0.15 }),
+  buy: () => melody([[523, 0.07], [784, 0.13]], { type: 'triangle', vol: 0.22 }),
+  build: () => melody([[440, 0.06], [660, 0.06], [880, 0.12]], { type: 'triangle', vol: 0.2 }),
+  pay: () => melody([[380, 0.09], [280, 0.16]], { type: 'sawtooth', vol: 0.16 }),
+  tax: () => melody([[300, 0.08], [220, 0.1], [180, 0.16]], { type: 'sawtooth', vol: 0.15 }),
+  gain: () => melody([[660, 0.06], [880, 0.06], [1108, 0.1]], { type: 'sine', vol: 0.18 }),
+  card: () => melody([[880, 0.05], [1108, 0.05], [1318, 0.05], [1568, 0.1]], { type: 'sine', vol: 0.18 }),
+  casinoSpin: () => noiseBurst(0.4, { vol: 0.08 }),
+  casinoWin: () => melody([[523, 0.07], [659, 0.07], [784, 0.07], [1047, 0.2]], { type: 'square', vol: 0.22 }),
+  casinoLose: () => tone(220, 0.32, { type: 'sawtooth', vol: 0.18, sweepTo: 90 }),
+  monopoly: () => melody([[523, 0.09], [659, 0.09], [784, 0.09], [1047, 0.09], [1318, 0.22]], { type: 'triangle', vol: 0.24 }),
+  landmark: () => melody([[392, 0.1], [523, 0.1], [659, 0.1], [784, 0.1], [1047, 0.1], [1318, 0.28]], { type: 'triangle', vol: 0.26 }),
+  warp: () => tone(200, 0.35, { type: 'sine', vol: 0.16, sweepTo: 1400 }),
+  jail: () => tone(140, 0.3, { type: 'square', vol: 0.16, sweepTo: 70 }),
+  bankrupt: () => melody([[300, 0.18], [220, 0.18], [140, 0.4]], { type: 'sawtooth', vol: 0.22 }),
+  win: () => melody([[523, 0.12], [659, 0.12], [784, 0.12], [1047, 0.12], [1318, 0.12], [1568, 0.4]], { type: 'triangle', vol: 0.26 }),
+};
+
+const BGM_NOTES = [
+  [220, 0.42], [261.6, 0.42], [329.6, 0.42], [440, 0.42],
+  [392, 0.42], [329.6, 0.42], [261.6, 0.42], [246.9, 0.6],
+];
+function startBGM() {
+  if (bgmHandle) return;
+  const loop = () => {
+    const dur = melody(BGM_NOTES, { type: 'triangle', vol: 0.05 });
+    bgmHandle = setTimeout(loop, dur * 1000 + 400);
+  };
+  loop();
+}
+
 const GROUPS = [
   { id: 0, name: '동남아', color: '#f472b6' },
   { id: 1, name: '동아시아', color: '#fb923c' },
@@ -230,6 +338,7 @@ function bankrupt(player) {
   const winner = players[1 - player.idx];
   log(`💥 ${player.name} 파산! 승자는 ${winner.name}!`);
   render();
+  winner.idx === 0 ? SFX.win() : SFX.bankrupt();
   showOverlay('GAME OVER', `${winner.name} 승리! (${player.name} 파산)`);
 }
 
@@ -266,6 +375,7 @@ function maybeCelebrateMonopoly(player, tile, cb) {
   if (tile.type === 'city' && groupFullyOwned(player.idx, tile.group)) {
     const g = GROUPS[tile.group];
     render();
+    SFX.monopoly();
     showEventCard('🎉', 'MONOPOLY', player.name, `${g.name} 지역 독점 완료! 통행료가 대폭 상승합니다.`, cb);
   } else {
     cb();
@@ -314,8 +424,10 @@ function proceedNormalStart() {
 }
 
 function jailPay() {
+  ensureAudio();
   const p = players[current];
   if (p.cash < JAIL_FEE) return;
+  SFX.pay();
   chargePlayer(p, JAIL_FEE, { toPot: true });
   p.stuck = false; p.jailTurns = 0;
   log(`🏝️ ${p.name}, ${JAIL_FEE}만원 내고 무인도 탈출!`);
@@ -323,6 +435,8 @@ function jailPay() {
 }
 
 function jailWait() {
+  ensureAudio();
+  SFX.click();
   const p = players[current];
   p.jailTurns++;
   log(`🏝️ ${p.name}, 이번 턴은 무인도에서 대기.`);
@@ -412,6 +526,8 @@ function rollForCurrent() {
   }
   document.getElementById('diceDisplay').textContent = `🎲 ${d1} + ${d2} = ${d1 + d2}`;
   log(`🎲 ${p.name}: ${d1} + ${d2} = ${d1 + d2}` + (d1 === d2 ? ' (더블!)' : ''));
+  SFX.dice();
+  if (d1 === d2) setTimeout(SFX.doubleDing, 150);
   renderActions();
 
   if (d1 === d2) p.doublesCount++; else p.doublesCount = 0;
@@ -419,6 +535,7 @@ function rollForCurrent() {
   if (p.doublesCount >= 3) {
     p.pos = 10; p.stuck = true; p.jailTurns = 0; p.doublesCount = 0;
     log(`🚨 연속 더블 3회! ${p.name} 무인도로 강제 이송!`);
+    SFX.jail();
     render();
     setTimeout(switchTurn, DELAY);
     return;
@@ -448,6 +565,7 @@ function movePlayerBy(player, steps, cb) {
       if (bonus > 0) msg += ` + 세금 환급 +${bonus}만원`;
       if (dividend > 0) msg += ` + 투자 배당 +${dividend}만원`;
       log(msg);
+      SFX.gain();
     }
     render();
     setTimeout(hop, STEP_DELAY);
@@ -487,6 +605,7 @@ function resolveTile(player, wasDouble) {
       player.cash += gained;
       pot = 0;
       log(`💰 ${player.name}, 중앙기금 ${gained}만원 획득!`);
+      SFX.gain();
       render();
       afterResolve();
       break;
@@ -496,6 +615,7 @@ function resolveTile(player, wasDouble) {
       for (let i = 0; i < 40; i++) if (i !== 30) options.push(i);
       const dest = options[Math.floor(Math.random() * options.length)];
       log(`🌀 ${player.name}, 순간이동 소용돌이에 빨려들어갑니다...!`);
+      SFX.warp();
       player.pos = dest;
       render();
       setTimeout(() => resolveTile(player, wasDouble), DELAY);
@@ -505,17 +625,20 @@ function resolveTile(player, wasDouble) {
       if (player.taxExempt) {
         player.taxExempt = false;
         log(`🎫 ${player.name}, 세금 면제권 사용! 재산세를 내지 않았습니다.`);
+        SFX.click();
         afterResolve();
         break;
       }
       const amt = taxAmount(player);
       log(`💸 ${player.name}, 재산세 ${amt}만원 납부. (자산 ${netWorth(player)}만원의 ${Math.round(TAX_RATE * 100)}%)`);
+      SFX.tax();
       chargePlayer(player, amt, { toPot: true });
       afterResolve();
       break;
     }
     case 'goldenkey': {
       const card = CARDS[Math.floor(Math.random() * CARDS.length)];
+      SFX.card();
       showKeyCard(player.name, card.text, () => {
         log(`🔑 ${player.name}: ${card.text}`);
         card.fn(player);
@@ -523,6 +646,7 @@ function resolveTile(player, wasDouble) {
         if (card.drawAgain) {
           const others = CARDS.filter(c => !c.drawAgain);
           const card2 = others[Math.floor(Math.random() * others.length)];
+          SFX.card();
           showKeyCard(player.name, card2.text, () => {
             log(`🔑 ${player.name}: ${card2.text}`);
             card2.fn(player);
@@ -542,15 +666,18 @@ function resolveTile(player, wasDouble) {
         afterResolve();
         break;
       }
+      SFX.casinoSpin();
       showEventCard('🎰', 'CASINO', player.name, `${result.stake}만원 베팅... ${result.label}`, () => {
         player.cash -= result.stake;
         if (result.mult === 0) {
           pot += result.stake;
           log(`🎰 ${player.name}, 카지노에서 ${result.stake}만원 베팅 후 잃었습니다.`);
+          SFX.casinoLose();
         } else {
           const payout = result.stake * result.mult;
           player.cash += payout;
           log(`🎰 ${player.name}, 카지노에서 ${result.stake}만원 베팅해 ${payout}만원 획득!`);
+          SFX.casinoWin();
         }
         render();
         afterResolve();
@@ -565,6 +692,7 @@ function resolveTile(player, wasDouble) {
             player.cash -= tile.price;
             tile.owner = player.idx; tile.hits = 0;
             log(`🏪 봇이 ${tile.name} 매입! (-${tile.price}만원)`);
+            SFX.buy();
           } else {
             log(`🏪 봇이 ${tile.name} 매입을 포기했습니다.`);
           }
@@ -582,6 +710,7 @@ function resolveTile(player, wasDouble) {
         const owner = players[tile.owner];
         const toll = compoundToll(tile);
         log(`🏪 ${player.name}, ${owner.name} 소유 ${tile.name} 도착. 통행료 ${toll}만원 지불! (다음엔 더 비싸집니다)`);
+        SFX.pay();
         chargePlayer(player, toll, { toPlayer: owner });
         tile.hits++;
         render();
@@ -596,6 +725,7 @@ function resolveTile(player, wasDouble) {
             player.cash -= tile.price;
             tile.owner = player.idx;
             log(`📈 봇이 ${tile.name} 매입! (-${tile.price}만원, 한 바퀴마다 +${trustDividend(tile)}만원 배당)`);
+            SFX.buy();
           } else {
             log(`📈 봇이 ${tile.name} 매입을 포기했습니다.`);
           }
@@ -622,6 +752,7 @@ function resolveTile(player, wasDouble) {
             player.cash -= tile.price;
             tile.owner = player.idx; tile.stars = 0;
             log(`🏙️ 봇이 ${tile.name} 매입! (-${tile.price}만원)`);
+            SFX.buy();
             maybeCelebrateMonopoly(player, tile, () => { render(); afterResolve(); });
           } else {
             log(`🏙️ 봇이 ${tile.name} 매입을 포기했습니다.`);
@@ -645,6 +776,7 @@ function resolveTile(player, wasDouble) {
               tile.stars++;
               if (tile.stars === 3) tile.maxedLap = player.lapCount;
               log(`🏗️ 봇이 ${tile.name}에 건설! (${tierName(tile)}, -${cost}만원, 통행료 ${getToll(tile)}만원)`);
+              SFX.build();
             } else {
               log(`${player.name}, 본인 소유의 ${tile.name} 도착. (건설 자금 부족)`);
             }
@@ -663,6 +795,7 @@ function resolveTile(player, wasDouble) {
               player.cash -= cost;
               tile.landmark = true;
               log(`👑 봇이 ${tile.name}에 ${tile.landmarkName}${tile.landmarkIcon}을(를) 건설했습니다! (-${cost}만원, 이제 인수 불가)`);
+              SFX.landmark();
             } else {
               log(`${player.name}, 본인 소유의 ${tile.name} 도착. (랜드마크 자금 부족)`);
             }
@@ -682,6 +815,7 @@ function resolveTile(player, wasDouble) {
         const toll = getToll(tile);
         if (tile.landmark) {
           log(`🏙️ ${player.name}, ${owner.name} 소유 ${tile.landmarkName} ${tile.landmarkIcon} 도착. 통행료 ${toll}만원 지불. (인수 불가)`);
+          SFX.pay();
           chargePlayer(player, toll, { toPlayer: owner });
           afterResolve();
         } else if (player.isBot) {
@@ -692,9 +826,11 @@ function resolveTile(player, wasDouble) {
             tile.owner = player.idx;
             if (tile.stars === 3) tile.maxedLap = player.lapCount;
             log(`🏆 봇이 ${owner.name} 소유 ${tile.name}을(를) 인수했습니다! (-${acq}만원)`);
+            SFX.buy();
             maybeCelebrateMonopoly(player, tile, afterResolve);
           } else {
             log(`🏙️ ${player.name}, ${owner.name} 소유 ${tile.name} 도착. 통행료 ${toll}만원 지불.`);
+            SFX.pay();
             chargePlayer(player, toll, { toPlayer: owner });
             afterResolve();
           }
@@ -715,6 +851,7 @@ function finishPending() {
 }
 
 function buyCurrent() {
+  ensureAudio();
   const p = players[current];
   const tile = TILES[p.pos];
   if (tile.owner !== null || p.cash < tile.price) return;
@@ -724,11 +861,14 @@ function buyCurrent() {
   if (tile.type === 'compound') tile.hits = 0;
   const icon = tile.type === 'compound' ? '🏪' : tile.type === 'trust' ? '📈' : '🏙️';
   log(`${icon} ${p.name}, ${tile.name} 매입! (-${tile.price}만원)`);
+  SFX.buy();
   phase = 'resolving';
   maybeCelebrateMonopoly(p, tile, finishPending);
 }
 
 function skipBuy() {
+  ensureAudio();
+  SFX.click();
   const p = players[current];
   const tile = TILES[p.pos];
   log(`${p.name}, ${tile.name} 매입을 포기했습니다.`);
@@ -737,6 +877,7 @@ function skipBuy() {
 }
 
 function buildCurrentOnLanding() {
+  ensureAudio();
   const p = players[current];
   const tile = TILES[p.pos];
   const cost = buildCost(tile);
@@ -745,11 +886,14 @@ function buildCurrentOnLanding() {
   tile.stars++;
   if (tile.stars === 3) tile.maxedLap = p.lapCount;
   log(`🏗️ ${p.name}, ${tile.name}에 건설! (${tierName(tile)}, -${cost}만원, 통행료 ${getToll(tile)}만원)`);
+  SFX.build();
   phase = 'resolving';
   finishPending();
 }
 
 function skipBuildOnLanding() {
+  ensureAudio();
+  SFX.click();
   const p = players[current];
   const tile = TILES[p.pos];
   log(`${p.name}, ${tile.name} 건설을 보류했습니다.`);
@@ -758,6 +902,7 @@ function skipBuildOnLanding() {
 }
 
 function buildLandmarkCurrent() {
+  ensureAudio();
   const p = players[current];
   const tile = TILES[p.pos];
   const cost = landmarkCost(tile);
@@ -765,11 +910,14 @@ function buildLandmarkCurrent() {
   p.cash -= cost;
   tile.landmark = true;
   log(`👑 ${p.name}, ${tile.name}에 ${tile.landmarkName} ${tile.landmarkIcon}을(를) 건설했습니다! (-${cost}만원, 이제 인수 불가)`);
+  SFX.landmark();
   phase = 'resolving';
   finishPending();
 }
 
 function skipLandmark() {
+  ensureAudio();
+  SFX.click();
   const p = players[current];
   const tile = TILES[p.pos];
   log(`${p.name}, ${tile.name} 랜드마크 건설을 보류했습니다.`);
@@ -778,17 +926,20 @@ function skipLandmark() {
 }
 
 function payTollCurrent() {
+  ensureAudio();
   const p = players[current];
   const tile = TILES[p.pos];
   const owner = players[tile.owner];
   const toll = getToll(tile);
   log(`🏙️ ${p.name}, ${owner.name} 소유 ${tile.name} 통행료 ${toll}만원 지불.`);
+  SFX.pay();
   chargePlayer(p, toll, { toPlayer: owner });
   phase = 'resolving';
   finishPending();
 }
 
 function acquireCurrent() {
+  ensureAudio();
   const p = players[current];
   const tile = TILES[p.pos];
   const owner = players[tile.owner];
@@ -798,6 +949,7 @@ function acquireCurrent() {
   tile.owner = p.idx;
   if (tile.stars === 3) tile.maxedLap = p.lapCount;
   log(`🏆 ${p.name}, ${owner.name} 소유 ${tile.name}을(를) 인수했습니다! (-${cost}만원)`);
+  SFX.buy();
   phase = 'resolving';
   maybeCelebrateMonopoly(p, tile, finishPending);
 }
@@ -1019,16 +1171,17 @@ function renderActions() {
   if (phase === 'idle' && !p.isBot && current === 0) {
     const rollBtn = document.createElement('button');
     rollBtn.textContent = '🎲 주사위 굴리기';
-    rollBtn.onclick = rollForCurrent;
+    rollBtn.onclick = () => { ensureAudio(); rollForCurrent(); };
     actionRow.appendChild(rollBtn);
   }
 }
 
-function openRules() { document.getElementById('rulesModal').classList.remove('hidden'); }
-function closeRules() { document.getElementById('rulesModal').classList.add('hidden'); }
+function openRules() { ensureAudio(); SFX.click(); document.getElementById('rulesModal').classList.remove('hidden'); }
+function closeRules() { SFX.click(); document.getElementById('rulesModal').classList.add('hidden'); }
 
 createBoard();
-document.getElementById('restartBtn').onclick = initGame;
+document.getElementById('restartBtn').onclick = () => { ensureAudio(); SFX.click(); initGame(); };
 document.getElementById('rulesBtn').onclick = openRules;
 document.getElementById('rulesCloseBtn').onclick = closeRules;
+document.getElementById('muteBtn').onclick = toggleMute;
 initGame();
