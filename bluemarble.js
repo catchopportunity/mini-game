@@ -173,25 +173,35 @@ CITY_DEF.forEach(([idx, name, price, landmarkName, landmarkIcon], order) => {
 // 돈을 내는 카드는 "내" 순자산에 비례, 돈을 받는 카드는 "상대" 순자산에 비례
 function opponentOf(p) { return players[1 - p.idx]; }
 function payAmount(p, rate) { return Math.max(1, Math.round(netWorth(p) * rate)); }
-function gainAmount(p, rate) { return Math.max(1, Math.round(netWorth(opponentOf(p)) * rate)); }
+// 상대와 5배 이상 격차로 뒤처진 플레이어(사람 전용)에게는 획득액을 대폭 증폭
+const DESPERATE_GAIN_BOOST = 3;
+function isDesperate(player) {
+  const oppWorth = netWorth(opponentOf(player));
+  const myWorth = Math.max(1, netWorth(player));
+  return oppWorth / myWorth >= DESPERATION_RATIO_CAP;
+}
+function gainAmount(p, rate) {
+  const boost = (!p.isBot && isDesperate(p)) ? DESPERATE_GAIN_BOOST : 1;
+  return Math.max(1, Math.round(netWorth(opponentOf(p)) * rate * boost));
+}
 
 const CARDS = [
-  { text: p => `공항 마일리지 적립! +${gainAmount(p, 0.08)}만원`, fn: p => { p.cash += gainAmount(p, 0.08); } },
-  { text: p => `세금 추징 -${payAmount(p, 0.06)}만원`, fn: p => { const amt = payAmount(p, 0.06); spend(p, amt); pot += amt; } },
-  { text: p => `길거리 이벤트 당첨! +${gainAmount(p, 0.10)}만원`, fn: p => { p.cash += gainAmount(p, 0.10); } },
-  { text: p => `여권 분실로 벌금 -${payAmount(p, 0.04)}만원`, fn: p => { const amt = payAmount(p, 0.04); spend(p, amt); pot += amt; } },
-  { text: p => `기부 활동 -${payAmount(p, 0.03)}만원`, fn: p => { const amt = payAmount(p, 0.03); spend(p, amt); pot += amt; } },
-  { text: p => `보너스 상금 +${gainAmount(p, 0.12)}만원`, fn: p => { p.cash += gainAmount(p, 0.12); } },
-  { text: '밀수 적발! 무인도로 강제 이송', fn: p => { p.pos = 10; p.stuck = true; p.jailTurns = 0; interrupted = true; } },
-  { text: '출발점으로 순간이동 (급여 없음)', fn: p => { p.pos = 0; interrupted = true; } },
-  { text: '투자 성공! 다음 세금은 면제됩니다.', fn: p => { p.taxExempt = true; } },
-  { text: p => `컨설팅비 청구! 상대에게 ${gainAmount(p, 0.08)}만원을 받았습니다.`, fn: p => { chargePlayer(opponentOf(p), gainAmount(p, 0.08), { toPlayer: p }); } },
-  { text: p => `선의의 기부자 등장! 상대에게 ${payAmount(p, 0.06)}만원을 지불합니다.`, fn: p => { chargePlayer(p, payAmount(p, 0.06), { toPlayer: opponentOf(p) }); } },
-  { text: p => `보물 지도 발견! 지도를 팔아 +${gainAmount(p, 0.09)}만원`, fn: p => { p.cash += gainAmount(p, 0.09); } },
-  { text: '황금열쇠 두 장 찬스! 카드를 한 번 더 뽑습니다.', drawAgain: true, fn: () => {} },
-  { text: p => `투자 배당 수익! +${gainAmount(p, 0.08)}만원 획득`, fn: p => { p.cash += gainAmount(p, 0.08); } },
-  { text: p => `벌금 고지서 도착! -${payAmount(p, 0.05)}만원 납부`, fn: p => { const amt = payAmount(p, 0.05); spend(p, amt); pot += amt; } },
-  { text: '무료 리모델링 쿠폰! 보유 도시 중 하나가 무료로 업그레이드됩니다.', fn: p => {
+  { favorable: true, text: p => `공항 마일리지 적립! +${gainAmount(p, 0.08)}만원`, fn: p => { p.cash += gainAmount(p, 0.08); } },
+  { favorable: false, text: p => `세금 추징 -${payAmount(p, 0.06)}만원`, fn: p => { const amt = payAmount(p, 0.06); spend(p, amt); pot += amt; } },
+  { favorable: true, text: p => `길거리 이벤트 당첨! +${gainAmount(p, 0.10)}만원`, fn: p => { p.cash += gainAmount(p, 0.10); } },
+  { favorable: false, text: p => `여권 분실로 벌금 -${payAmount(p, 0.04)}만원`, fn: p => { const amt = payAmount(p, 0.04); spend(p, amt); pot += amt; } },
+  { favorable: false, text: p => `기부 활동 -${payAmount(p, 0.03)}만원`, fn: p => { const amt = payAmount(p, 0.03); spend(p, amt); pot += amt; } },
+  { favorable: true, text: p => `보너스 상금 +${gainAmount(p, 0.12)}만원`, fn: p => { p.cash += gainAmount(p, 0.12); } },
+  { favorable: false, text: '밀수 적발! 무인도로 강제 이송', fn: p => { p.pos = 10; p.stuck = true; p.jailTurns = 0; interrupted = true; } },
+  { favorable: false, text: '출발점으로 순간이동 (급여 없음)', fn: p => { p.pos = 0; interrupted = true; } },
+  { favorable: true, text: '투자 성공! 다음 세금은 면제됩니다.', fn: p => { p.taxExempt = true; } },
+  { favorable: true, text: p => `컨설팅비 청구! 상대에게 ${gainAmount(p, 0.08)}만원을 받았습니다.`, fn: p => { chargePlayer(opponentOf(p), gainAmount(p, 0.08), { toPlayer: p }); } },
+  { favorable: false, text: p => `선의의 기부자 등장! 상대에게 ${payAmount(p, 0.06)}만원을 지불합니다.`, fn: p => { chargePlayer(p, payAmount(p, 0.06), { toPlayer: opponentOf(p) }); } },
+  { favorable: true, text: p => `보물 지도 발견! 지도를 팔아 +${gainAmount(p, 0.09)}만원`, fn: p => { p.cash += gainAmount(p, 0.09); } },
+  { favorable: true, text: '황금열쇠 두 장 찬스! 카드를 한 번 더 뽑습니다.', drawAgain: true, fn: () => {} },
+  { favorable: true, text: p => `투자 배당 수익! +${gainAmount(p, 0.08)}만원 획득`, fn: p => { p.cash += gainAmount(p, 0.08); } },
+  { favorable: false, text: p => `벌금 고지서 도착! -${payAmount(p, 0.05)}만원 납부`, fn: p => { const amt = payAmount(p, 0.05); spend(p, amt); pot += amt; } },
+  { favorable: true, text: '무료 리모델링 쿠폰! 보유 도시 중 하나가 무료로 업그레이드됩니다.', fn: p => {
       const candidates = TILES.filter(t => t && t.type === 'city' && t.owner === p.idx && t.stars < 5);
       if (candidates.length) {
         const t = candidates[Math.floor(Math.random() * candidates.length)];
@@ -202,6 +212,15 @@ const CARDS = [
       }
     } },
 ];
+
+function pickCard(player, pool = CARDS) {
+  let options = pool;
+  if (!player.isBot && isDesperate(player)) {
+    const favorable = options.filter(c => c.favorable);
+    if (favorable.length) options = favorable;
+  }
+  return options[Math.floor(Math.random() * options.length)];
+}
 
 function cardText(card, p) { return typeof card.text === 'function' ? card.text(p) : card.text; }
 
@@ -219,7 +238,15 @@ function tilePos(i) {
 let players, pot, current, phase, interrupted;
 const tileEls = [];
 
+// 새 게임이 시작되면 이전 게임에서 예약된 setTimeout이 뒤늦게 실행돼 리셋된 상태를 건드리지 않도록 세대 값으로 무효화
+let gameEpoch = 0;
+function schedule(fn, delay) {
+  const epoch = gameEpoch;
+  return setTimeout(() => { if (epoch === gameEpoch) fn(); }, delay);
+}
+
 function initGame() {
+  gameEpoch++;
   TILES.forEach(t => {
     if (t.type === 'city') { t.owner = null; t.stars = 0; t.landmark = false; t.stageLap = null; }
     else if (t.type === 'compound') { t.owner = null; t.hits = 0; }
@@ -374,10 +401,10 @@ function showEventCard(icon, title, who, text, cb) {
   document.getElementById('keyText').textContent = text;
   modal.classList.remove('hide');
   modal.classList.add('show');
-  setTimeout(() => {
+  schedule(() => {
     modal.classList.remove('show');
     modal.classList.add('hide');
-    setTimeout(() => {
+    schedule(() => {
       modal.classList.remove('hide');
       cb();
     }, 320);
@@ -419,7 +446,7 @@ function proceedNormalStart() {
   p.doublesCount = 0;
   render();
   if (p.isBot) {
-    setTimeout(rollForCurrent, DELAY);
+    schedule(rollForCurrent, DELAY);
   }
 }
 
@@ -431,8 +458,8 @@ function tileFavorability(tile, player) {
     case 'island': return -6;
     case 'rest': return 3 + pot * 0.01;
     case 'warp': return -1;
-    case 'tax': return -2 - taxAmount(player) * 0.01;
-    case 'goldenkey': return -0.5;
+    case 'tax': return -2 - taxAmount(player) * 0.01 - player.cash * 0.005;
+    case 'goldenkey': return isDesperate(player) ? 4 : -0.5;
     case 'casino': return -0.5;
     case 'compound':
       if (tile.owner === null) return 2;
@@ -517,7 +544,7 @@ function rollForCurrent() {
       log(`🎲 ${p.name}: ${d1} + ${d2} = ${d1 + d2}. 탈출 실패... (대기 ${p.jailTurns}/2턴)`);
       SFX.jail();
       render();
-      setTimeout(switchTurn, DELAY);
+      schedule(switchTurn, DELAY);
     }
     return;
   }
@@ -542,7 +569,7 @@ function rollForCurrent() {
     log(`🚨 연속 더블 3회! ${p.name} 무인도로 강제 이송!`);
     SFX.jail();
     render();
-    setTimeout(switchTurn, DELAY);
+    schedule(switchTurn, DELAY);
     return;
   }
 
@@ -553,7 +580,7 @@ function movePlayerBy(player, steps, cb) {
   let remaining = steps;
   const hop = () => {
     if (remaining <= 0) {
-      setTimeout(cb, DELAY);
+      schedule(cb, DELAY);
       return;
     }
     player.pos = (player.pos + 1) % 40;
@@ -573,7 +600,7 @@ function movePlayerBy(player, steps, cb) {
       SFX.gain();
     }
     render();
-    setTimeout(hop, STEP_DELAY);
+    schedule(hop, STEP_DELAY);
   };
   hop();
 }
@@ -589,10 +616,10 @@ function resolveTile(player, wasDouble) {
       log(`✨ 더블! ${player.name} 한 번 더 굴립니다.`);
       phase = 'idle';
       render();
-      if (player.isBot) setTimeout(rollForCurrent, DELAY);
+      if (player.isBot) schedule(rollForCurrent, DELAY);
       else renderActions();
     } else {
-      setTimeout(switchTurn, DELAY);
+      schedule(switchTurn, DELAY);
     }
   };
 
@@ -607,7 +634,7 @@ function resolveTile(player, wasDouble) {
       log(`🏝️ ${player.name}, 무인도에 직접 도착해서 갇혔습니다!`);
       SFX.jail();
       render();
-      setTimeout(switchTurn, DELAY);
+      schedule(switchTurn, DELAY);
       break;
     case 'rest': {
       const gained = pot;
@@ -627,7 +654,7 @@ function resolveTile(player, wasDouble) {
       SFX.warp();
       player.pos = dest;
       render();
-      setTimeout(() => resolveTile(player, wasDouble), DELAY);
+      schedule(() => resolveTile(player, wasDouble), DELAY);
       break;
     }
     case 'tax': {
@@ -642,11 +669,18 @@ function resolveTile(player, wasDouble) {
       log(`💸 ${player.name}, 재산세 ${amt}만원 납부. (자산 ${netWorth(player)}만원의 ${Math.round(TAX_RATE * 100)}%)`);
       SFX.tax();
       chargePlayer(player, amt, { toPot: true });
+      if (phase !== 'gameover') {
+        const burnAmt = Math.round(player.cash * 0.5);
+        player.cash -= burnAmt;
+        log(`🔥 ${player.name}, 남은 현금의 절반 ${burnAmt}만원이 그대로 소각되었습니다!`);
+        SFX.tax();
+        render();
+      }
       afterResolve();
       break;
     }
     case 'goldenkey': {
-      const card = CARDS[Math.floor(Math.random() * CARDS.length)];
+      const card = pickCard(player);
       SFX.card();
       const drawnText = cardText(card, player);
       showKeyCard(player.name, drawnText, () => {
@@ -655,7 +689,7 @@ function resolveTile(player, wasDouble) {
         render();
         if (card.drawAgain) {
           const others = CARDS.filter(c => !c.drawAgain);
-          const card2 = others[Math.floor(Math.random() * others.length)];
+          const card2 = pickCard(player, others);
           SFX.card();
           const drawnText2 = cardText(card2, player);
           showKeyCard(player.name, drawnText2, () => {
@@ -988,6 +1022,7 @@ function offerPostAcquireBuild(tile) {
     phase = 'awaiting-post-build';
     renderActions();
   } else {
+    if (tile.type === 'city') log(`${tile.name}은(는) 이미 ${TIER_NAMES[5]}까지 지어져 있어 추가 건설을 제안하지 않습니다.`);
     finishPending();
   }
 }
