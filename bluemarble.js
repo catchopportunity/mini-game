@@ -294,6 +294,11 @@ function acquireCost(tile) {
   return totalInvested(tile) * 2;
 }
 
+// 인수는 통행료를 면제해주는 게 아니라 통행료 + 인수 프리미엄을 함께 지불
+function acquireTotalCost(tile) {
+  return getToll(tile) + acquireCost(tile);
+}
+
 function compoundToll(tile) {
   return Math.round(tile.price * 0.15) * (2 ** Math.min(tile.hits, COMPOUND_TOLL_CAP_HITS));
 }
@@ -830,12 +835,12 @@ function resolveTile(player, wasDouble) {
           afterResolve();
         } else if (player.isBot) {
           const buffer = 300;
-          const acq = acquireCost(tile);
+          const acq = acquireTotalCost(tile);
           if (tile.stars > 0 && player.cash - acq >= buffer) {
             chargePlayer(player, acq, { toPlayer: owner });
             tile.owner = player.idx;
             tile.stageLap = player.lapCount;
-            log(`🏆 봇이 ${owner.name} 소유 ${tile.name}을(를) 인수했습니다! (-${acq}만원)`);
+            log(`🏆 봇이 ${owner.name} 소유 ${tile.name}을(를) 인수했습니다! (통행료 포함 -${acq}만원)`);
             SFX.buy();
             maybeCelebrateMonopoly(player, tile, afterResolve);
           } else {
@@ -953,12 +958,12 @@ function acquireCurrent() {
   const p = players[current];
   const tile = TILES[p.pos];
   const owner = players[tile.owner];
-  const cost = acquireCost(tile);
+  const cost = acquireTotalCost(tile);
   if (p.cash < cost) return;
   chargePlayer(p, cost, { toPlayer: owner });
   tile.owner = p.idx;
   tile.stageLap = p.lapCount;
-  log(`🏆 ${p.name}, ${owner.name} 소유 ${tile.name}을(를) 인수했습니다! (-${cost}만원)`);
+  log(`🏆 ${p.name}, ${owner.name} 소유 ${tile.name}을(를) 인수했습니다! (통행료 포함 -${cost}만원)`);
   SFX.buy();
   phase = 'resolving';
   maybeCelebrateMonopoly(p, tile, finishPending);
@@ -1147,9 +1152,10 @@ function renderActions() {
     const tile = TILES[p.pos];
     const owner = players[tile.owner];
     const toll = getToll(tile);
-    const acq = acquireCost(tile);
+    const premium = acquireCost(tile);
+    const acq = toll + premium;
     promptBox.style.display = 'block';
-    promptBox.textContent = `${owner.name} 소유 ${tile.name} (${tierName(tile)}) 도착. 통행료 ${toll}만원을 낼까요, ${acq}만원 내고 인수할까요?`;
+    promptBox.textContent = `${owner.name} 소유 ${tile.name} (${tierName(tile)}) 도착. 통행료 ${toll}만원만 낼까요, 통행료+인수 프리미엄 ${acq}만원(=${toll}+${premium}) 내고 인수할까요?`;
     const tollBtn = document.createElement('button');
     tollBtn.className = 'secondary';
     tollBtn.textContent = `통행료 내기 (${toll})`;
