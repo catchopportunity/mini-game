@@ -242,6 +242,7 @@ function tilePos(i) {
 }
 
 let players, pot, current, phase, interrupted;
+let pendingCharge = null; // { player, amount, opts, onDone } while awaiting-asset-sale
 let botCount = 1;
 let botThinking = false;
 const BOT_THINK_DELAY = [500, 950]; // [min, max] ms random range before a bot reveals its decision
@@ -393,6 +394,45 @@ function chargePlayer(player, amount, opts = {}) {
   if (opts.toPlayer) opts.toPlayer.cash += amount;
   render();
   return true;
+}
+
+// 사람이 강제 지불(통행료/세금)을 감당 못 하면 자동 매각 대신 직접 고를 기회를 줌.
+// 봇이거나 이미 감당 가능하거나 팔 게 없으면 기존과 동일하게 즉시 처리.
+function chargePlayerInteractive(player, amount, opts, onDone) {
+  const owned = TILES.filter(t => t && t.owner === player.idx &&
+    (t.type === 'city' || t.type === 'compound' || t.type === 'trust'));
+  if (player.isBot || player.cash >= amount || owned.length === 0) {
+    chargePlayer(player, amount, opts);
+    onDone();
+    return;
+  }
+  pendingCharge = { player, amount, opts, onDone };
+  phase = 'awaiting-asset-sale';
+  renderActions();
+}
+
+function sellAssetForPending(tileIdx) {
+  ensureAudio();
+  SFX.click();
+  const t = TILES[tileIdx];
+  const p = pendingCharge.player;
+  const refund = Math.floor(assetValue(t) * 0.5);
+  t.owner = null;
+  if (t.type === 'city') { t.stars = 0; t.landmark = false; t.stageLap = null; }
+  if (t.type === 'compound') t.hits = 0;
+  p.cash += refund;
+  log(`💵 ${p.name}, ${t.name} 매각 (+${refund}만원)`);
+  const stillOwned = TILES.filter(tl => tl && tl.owner === p.idx &&
+    (tl.type === 'city' || tl.type === 'compound' || tl.type === 'trust'));
+  if (p.cash >= pendingCharge.amount || stillOwned.length === 0) {
+    const { amount, opts, onDone } = pendingCharge;
+    pendingCharge = null;
+    phase = 'resolving';
+    chargePlayer(p, amount, opts);
+    onDone();
+  } else {
+    render();
+  }
 }
 
 // 봇이 여럿일 때는 파산 즉시 게임이 끝나지 않고 그 플레이어만 탈락, 남은 인원으로 계속.
@@ -735,15 +775,16 @@ function resolveTile(player, wasDouble) {
       const amt = taxAmount(player);
       log(`💸 ${player.name}, 재산세 ${amt}만원 납부. (자산 ${netWorth(player)}만원의 ${Math.round(TAX_RATE * 100)}%)`);
       SFX.tax();
-      chargePlayer(player, amt, { toPot: true });
-      if (!player.eliminated) {
-        const burnAmt = Math.round(player.cash * 0.5);
-        player.cash -= burnAmt;
-        log(`🔥 ${player.name}, 남은 현금의 절반 ${burnAmt}만원이 그대로 소각되었습니다!`);
-        SFX.tax();
-        render();
-      }
-      afterResolve();
+      chargePlayerInteractive(player, amt, { toPot: true }, () => {
+        if (!player.eliminated) {
+          const burnAmt = Math.round(player.cash * 0.5);
+          player.cash -= burnAmt;
+          log(`🔥 ${player.name}, 남은 현금의 절반 ${burnAmt}만원이 그대로 소각되었습니다!`);
+          SFX.tax();
+          render();
+        }
+        afterResolve();
+      });
       break;
     }
     case 'goldenkey': {
@@ -827,10 +868,8 @@ function resolveTile(player, wasDouble) {
         const toll = compoundToll(tile);
         log(`🏪 ${player.name}, ${owner.name} 소유 ${tile.name} 도착. 통행료 ${toll}만원 지불! (다음엔 더 비싸집니다)`);
         SFX.pay();
-        chargePlayer(player, toll, { toPlayer: owner });
         tile.hits++;
-        render();
-        afterResolve();
+        chargePlayerInteractive(player, toll, { toPlayer: owner }, afterResolve);
       }
       break;
     case 'trust':
@@ -952,8 +991,7 @@ function resolveTile(player, wasDouble) {
         if (tile.landmark) {
           log(`🏙️ ${player.name}, ${owner.name} 소유 ${tile.landmarkName} ${tile.landmarkIcon} 도착. 통행료 ${toll}만원 지불. (인수 불가)`);
           SFX.pay();
-          chargePlayer(player, toll, { toPlayer: owner });
-          afterResolve();
+          chargePlayerInteractive(player, toll, { toPlayer: owner }, afterResolve);
         } else if (player.isBot) {
           botThinking = true; render();
           schedule(() => {
@@ -1086,9 +1124,10 @@ function payTollCurrent() {
   const toll = getToll(tile);
   log(`🏙️ ${p.name}, ${owner.name} 소유 ${tile.name} 통행료 ${toll}만원 지불.`);
   SFX.pay();
-  chargePlayer(p, toll, { toPlayer: owner });
-  phase = 'resolving';
-  finishPending();
+  chargePlayerInteractive(p, toll, { toPlayer: owner }, () => {
+    phase = 'resolving';
+    finishPending();
+  });
 }
 
 function acquireCurrent() {
@@ -1363,6 +1402,26 @@ function renderActions() {
     acqBtn.onclick = acquireCurrent;
     actionRow.appendChild(tollBtn);
     actionRow.appendChild(acqBtn);
+    return;
+  }
+
+  if (phase === 'awaiting-asset-sale' && !p.isBot) {
+    const need = pendingCharge.amount;
+    const short = Math.max(0, need - p.cash);
+    promptBox.style.display = 'block';
+    promptBox.textContent = `자금 부족! ${need}만원 필요 (보유 ${p.cash}만원, ${short}만원 부족) — 매각할 자산을 직접 고르세요`;
+    const owned = TILES.filter(t => t && t.owner === p.idx &&
+      (t.type === 'city' || t.type === 'compound' || t.type === 'trust'))
+      .sort((a, b) => assetValue(b) - assetValue(a));
+    owned.forEach(t => {
+      const idx = TILES.indexOf(t);
+      const refund = Math.floor(assetValue(t) * 0.5);
+      const btn = document.createElement('button');
+      btn.className = 'secondary';
+      btn.textContent = `${t.name} 매각 (+${refund})`;
+      btn.onclick = () => sellAssetForPending(idx);
+      actionRow.appendChild(btn);
+    });
     return;
   }
 
