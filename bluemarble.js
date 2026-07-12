@@ -148,7 +148,6 @@ const CASINO_IDX = [6];      // 카지노: 즉석에서 베팅 도박
 const COMPOUND_TOLL_CAP_HITS = 5; // 통행료 배증은 최대 32배까지만
 const TRUST_DIVIDEND_RATE = 0.15;
 const SALARY = 500;
-const JAIL_FEE = 80;
 const TIER_NAMES = ['빈 땅', '별장', '빌딩', '호텔'];
 
 const TILES = [];
@@ -167,7 +166,7 @@ CITY_DEF.forEach(([idx, name, price, landmarkName, landmarkIcon], order) => {
   TILES[idx] = {
     type: 'city', name, price, group: groupId, landmarkName, landmarkIcon,
     tollBase: Math.round(price * 0.15),
-    owner: null, stars: 0, landmark: false, maxedLap: null,
+    owner: null, stars: 0, landmark: false, stageLap: null,
   };
 });
 
@@ -188,11 +187,11 @@ const CARDS = [
   { text: '은행 이자 수익! 보유 현금의 10% 획득', fn: p => { p.cash += Math.round(p.cash * 0.1); } },
   { text: '벌금 고지서 도착! 보유 현금의 5% 납부', fn: p => { const amt = Math.round(p.cash * 0.05); spend(p, amt); pot += amt; } },
   { text: '무료 리모델링 쿠폰! 보유 도시 중 하나가 무료로 업그레이드됩니다.', fn: p => {
-      const candidates = TILES.filter(t => t && t.type === 'city' && t.owner === p.idx && t.stars < 3 && groupFullyOwned(p.idx, t.group));
+      const candidates = TILES.filter(t => t && t.type === 'city' && t.owner === p.idx && t.stars < 3);
       if (candidates.length) {
         const t = candidates[Math.floor(Math.random() * candidates.length)];
         t.stars++;
-        if (t.stars === 3) t.maxedLap = p.lapCount;
+        t.stageLap = p.lapCount;
       } else {
         p.cash += 80;
       }
@@ -215,7 +214,7 @@ const tileEls = [];
 
 function initGame() {
   TILES.forEach(t => {
-    if (t.type === 'city') { t.owner = null; t.stars = 0; t.landmark = false; t.maxedLap = null; }
+    if (t.type === 'city') { t.owner = null; t.stars = 0; t.landmark = false; t.stageLap = null; }
     else if (t.type === 'compound') { t.owner = null; t.hits = 0; }
     else if (t.type === 'trust') { t.owner = null; }
   });
@@ -313,7 +312,7 @@ function ensureFunds(player, amount) {
     if (player.cash >= amount) break;
     const refund = Math.floor(t.price * 0.5);
     t.owner = null;
-    if (t.type === 'city') { t.stars = 0; t.landmark = false; t.maxedLap = null; }
+    if (t.type === 'city') { t.stars = 0; t.landmark = false; t.stageLap = null; }
     if (t.type === 'compound') t.hits = 0;
     player.cash += refund;
     log(`💵 ${player.name}, ${t.name} 매각 (+${refund}만원)`);
@@ -387,30 +386,12 @@ function startTurn(idx) {
   current = idx;
   interrupted = false;
   const p = players[idx];
-  render();
-  if (p.stuck) {
-    if (p.jailTurns >= 2) {
-      p.stuck = false; p.jailTurns = 0;
-      log(`🏝️ ${p.name} 무인도에서 강제 석방!`);
-      proceedNormalStart();
-    } else if (p.isBot) {
-      if (p.cash >= JAIL_FEE + 250) {
-        chargePlayer(p, JAIL_FEE, { toPot: true });
-        p.stuck = false; p.jailTurns = 0;
-        log(`🏝️ 봇이 ${JAIL_FEE}만원 내고 무인도 탈출!`);
-        proceedNormalStart();
-      } else {
-        p.jailTurns++;
-        log('🏝️ 봇이 무인도에서 대기합니다.');
-        setTimeout(switchTurn, DELAY);
-      }
-    } else {
-      phase = 'jail-choice';
-      renderActions();
-    }
-  } else {
-    proceedNormalStart();
+  if (p.stuck && p.jailTurns >= 3) {
+    p.stuck = false; p.jailTurns = 0;
+    log(`🏝️ ${p.name} 무인도에서 강제 석방!`);
   }
+  render();
+  proceedNormalStart();
 }
 
 function proceedNormalStart() {
@@ -421,26 +402,6 @@ function proceedNormalStart() {
   if (p.isBot) {
     setTimeout(rollForCurrent, DELAY);
   }
-}
-
-function jailPay() {
-  ensureAudio();
-  const p = players[current];
-  if (p.cash < JAIL_FEE) return;
-  SFX.pay();
-  chargePlayer(p, JAIL_FEE, { toPot: true });
-  p.stuck = false; p.jailTurns = 0;
-  log(`🏝️ ${p.name}, ${JAIL_FEE}만원 내고 무인도 탈출!`);
-  proceedNormalStart();
-}
-
-function jailWait() {
-  ensureAudio();
-  SFX.click();
-  const p = players[current];
-  p.jailTurns++;
-  log(`🏝️ ${p.name}, 이번 턴은 무인도에서 대기.`);
-  setTimeout(switchTurn, DELAY);
 }
 
 // 착지할 칸이 해당 플레이어에게 얼마나 유리한지 대략적으로 점수화
@@ -517,6 +478,26 @@ function rollForCurrent() {
   const p = players[current];
   let d1 = 1 + Math.floor(Math.random() * 6);
   let d2 = 1 + Math.floor(Math.random() * 6);
+
+  if (p.stuck) {
+    document.getElementById('diceDisplay').textContent = `🎲 ${d1} + ${d2} = ${d1 + d2}`;
+    SFX.dice();
+    if (d1 === d2) {
+      p.stuck = false; p.jailTurns = 0;
+      log(`🎲 ${p.name}: ${d1} + ${d2} = ${d1 + d2} (더블!) 🏝️ 무인도 탈출!`);
+      setTimeout(SFX.doubleDing, 150);
+      // 탈출 굴림으로 이동은 하지만, 더블이어도 추가 굴림 보너스는 없음
+      movePlayerBy(p, d1 + d2, () => resolveTile(p, false));
+    } else {
+      p.jailTurns++;
+      log(`🎲 ${p.name}: ${d1} + ${d2} = ${d1 + d2}. 탈출 실패... (대기 ${p.jailTurns}/3턴)`);
+      SFX.jail();
+      render();
+      setTimeout(switchTurn, DELAY);
+    }
+    return;
+  }
+
   if (!p.isBot) {
     const desperation = desperationLevel(p);
     if (desperation > 0 && Math.random() < desperation) {
@@ -750,7 +731,7 @@ function resolveTile(player, wasDouble) {
           const buffer = 250;
           if (player.cash - tile.price >= buffer) {
             player.cash -= tile.price;
-            tile.owner = player.idx; tile.stars = 0;
+            tile.owner = player.idx; tile.stars = 0; tile.stageLap = player.lapCount;
             log(`🏙️ 봇이 ${tile.name} 매입! (-${tile.price}만원)`);
             SFX.buy();
             maybeCelebrateMonopoly(player, tile, () => { render(); afterResolve(); });
@@ -765,8 +746,10 @@ function resolveTile(player, wasDouble) {
           window.__pendingResolve = afterResolve;
         }
       } else if (tile.owner === player.idx) {
-        const canBuildNext = tile.stars < 3 && groupFullyOwned(player.idx, tile.group);
-        const landmarkEligible = tile.stars === 3 && !tile.landmark && player.lapCount > tile.maxedLap;
+        // 색깔 그룹 독점 여부와 무관하게, 마지막 건설 이후 한 바퀴를 돌고 다시 착지하면 다음 단계 건설 가능
+        const lapCleared = player.lapCount > tile.stageLap;
+        const canBuildNext = tile.stars < 3 && lapCleared;
+        const landmarkEligible = tile.stars === 3 && !tile.landmark && lapCleared;
         if (canBuildNext) {
           const cost = buildCost(tile);
           if (player.isBot) {
@@ -774,7 +757,7 @@ function resolveTile(player, wasDouble) {
             if (player.cash - cost >= buffer) {
               player.cash -= cost;
               tile.stars++;
-              if (tile.stars === 3) tile.maxedLap = player.lapCount;
+              tile.stageLap = player.lapCount;
               log(`🏗️ 봇이 ${tile.name}에 건설! (${tierName(tile)}, -${cost}만원, 통행료 ${getToll(tile)}만원)`);
               SFX.build();
             } else {
@@ -794,6 +777,7 @@ function resolveTile(player, wasDouble) {
             if (player.cash - cost >= buffer) {
               player.cash -= cost;
               tile.landmark = true;
+              tile.stageLap = player.lapCount;
               log(`👑 봇이 ${tile.name}에 ${tile.landmarkName}${tile.landmarkIcon}을(를) 건설했습니다! (-${cost}만원, 이제 인수 불가)`);
               SFX.landmark();
             } else {
@@ -807,7 +791,8 @@ function resolveTile(player, wasDouble) {
             window.__pendingResolve = afterResolve;
           }
         } else {
-          log(`${player.name}, 본인 소유의 ${tile.name} 도착.`);
+          const reason = tile.landmark ? ' (이미 랜드마크 완공)' : ' (한 바퀴 더 돌아야 다음 건설 가능)';
+          log(`${player.name}, 본인 소유의 ${tile.name} 도착.${reason}`);
           afterResolve();
         }
       } else {
@@ -824,7 +809,7 @@ function resolveTile(player, wasDouble) {
           if (tile.stars > 0 && player.cash - acq >= buffer) {
             chargePlayer(player, acq, { toPlayer: owner });
             tile.owner = player.idx;
-            if (tile.stars === 3) tile.maxedLap = player.lapCount;
+            tile.stageLap = player.lapCount;
             log(`🏆 봇이 ${owner.name} 소유 ${tile.name}을(를) 인수했습니다! (-${acq}만원)`);
             SFX.buy();
             maybeCelebrateMonopoly(player, tile, afterResolve);
@@ -857,7 +842,7 @@ function buyCurrent() {
   if (tile.owner !== null || p.cash < tile.price) return;
   p.cash -= tile.price;
   tile.owner = p.idx;
-  if (tile.type === 'city') tile.stars = 0;
+  if (tile.type === 'city') { tile.stars = 0; tile.stageLap = p.lapCount; }
   if (tile.type === 'compound') tile.hits = 0;
   const icon = tile.type === 'compound' ? '🏪' : tile.type === 'trust' ? '📈' : '🏙️';
   log(`${icon} ${p.name}, ${tile.name} 매입! (-${tile.price}만원)`);
@@ -884,7 +869,7 @@ function buildCurrentOnLanding() {
   if (p.cash < cost) return;
   p.cash -= cost;
   tile.stars++;
-  if (tile.stars === 3) tile.maxedLap = p.lapCount;
+  tile.stageLap = p.lapCount;
   log(`🏗️ ${p.name}, ${tile.name}에 건설! (${tierName(tile)}, -${cost}만원, 통행료 ${getToll(tile)}만원)`);
   SFX.build();
   phase = 'resolving';
@@ -947,7 +932,7 @@ function acquireCurrent() {
   if (p.cash < cost) return;
   chargePlayer(p, cost, { toPlayer: owner });
   tile.owner = p.idx;
-  if (tile.stars === 3) tile.maxedLap = p.lapCount;
+  tile.stageLap = p.lapCount;
   log(`🏆 ${p.name}, ${owner.name} 소유 ${tile.name}을(를) 인수했습니다! (-${cost}만원)`);
   SFX.buy();
   phase = 'resolving';
@@ -1001,7 +986,7 @@ function render() {
     document.getElementById('cash' + i).textContent = fmt(p.cash);
     const cnt = TILES.filter(t => t && t.owner === i &&
       (t.type === 'city' || t.type === 'compound' || t.type === 'trust')).length;
-    document.getElementById('props' + i).textContent = `보유 자산 ${cnt}` + (p.stuck ? ' · 🏝️무인도' : '');
+    document.getElementById('props' + i).textContent = `보유 자산 ${cnt}` + (p.stuck ? ` · 🏝️무인도(${p.jailTurns}/3)` : '');
     document.getElementById('pcard' + i).classList.toggle('turn', current === i && phase !== 'gameover');
   });
 
@@ -1073,22 +1058,6 @@ function renderActions() {
 
   if (phase === 'gameover') return;
   const p = players[current];
-
-  if (phase === 'jail-choice' && !p.isBot) {
-    promptBox.style.display = 'block';
-    promptBox.textContent = `🏝️ 무인도에 갇혔습니다! (대기 ${p.jailTurns}/2턴)`;
-    const payBtn = document.createElement('button');
-    payBtn.textContent = `${JAIL_FEE}만원 내고 탈출`;
-    payBtn.disabled = p.cash < JAIL_FEE;
-    payBtn.onclick = jailPay;
-    const waitBtn = document.createElement('button');
-    waitBtn.className = 'secondary';
-    waitBtn.textContent = '대기';
-    waitBtn.onclick = jailWait;
-    actionRow.appendChild(payBtn);
-    actionRow.appendChild(waitBtn);
-    return;
-  }
 
   if (phase === 'awaiting-buy' && !p.isBot) {
     const tile = TILES[p.pos];
@@ -1169,8 +1138,12 @@ function renderActions() {
   }
 
   if (phase === 'idle' && !p.isBot && current === 0) {
+    if (p.stuck) {
+      promptBox.style.display = 'block';
+      promptBox.textContent = `🏝️ 무인도에 갇혔습니다! 더블이 나오면 탈출 (실패 ${p.jailTurns}/3턴, 3턴 차면 강제 석방)`;
+    }
     const rollBtn = document.createElement('button');
-    rollBtn.textContent = '🎲 주사위 굴리기';
+    rollBtn.textContent = p.stuck ? '🎲 탈출 시도' : '🎲 주사위 굴리기';
     rollBtn.onclick = () => { ensureAudio(); rollForCurrent(); };
     actionRow.appendChild(rollBtn);
   }
