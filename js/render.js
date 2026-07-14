@@ -34,7 +34,35 @@ function createBoard() {
     board.appendChild(el);
     tileEls[i] = el;
   }
+  drawBoardPath();
 }
+
+// 칸과 칸 사이(gap)로 이동 경로가 하나의 끈처럼 흐르도록, 타일 중심을 순서대로 이은 선을 그린다.
+// 칸 크기가 반응형(clamp)이라 실제 렌더된 위치를 매번 다시 측정해서 그린다.
+function drawBoardPath() {
+  const board = document.getElementById('board');
+  const svg = document.getElementById('boardPath');
+  const line = document.getElementById('boardPathLine');
+  if (!board || !svg || !line || tileEls.length < 40) return;
+  const boardRect = board.getBoundingClientRect();
+  if (boardRect.width === 0 || boardRect.height === 0) return;
+  svg.setAttribute('width', boardRect.width);
+  svg.setAttribute('height', boardRect.height);
+  svg.setAttribute('viewBox', `0 0 ${boardRect.width} ${boardRect.height}`);
+  const d = tileEls.map((el, i) => {
+    const r = el.getBoundingClientRect();
+    const x = (r.left + r.width / 2 - boardRect.left).toFixed(1);
+    const y = (r.top + r.height / 2 - boardRect.top).toFixed(1);
+    return `${i === 0 ? 'M' : 'L'} ${x} ${y}`;
+  }).join(' ');
+  line.setAttribute('d', d);
+}
+
+let boardPathResizeTimer = null;
+window.addEventListener('resize', () => {
+  clearTimeout(boardPathResizeTimer);
+  boardPathResizeTimer = setTimeout(drawBoardPath, 120);
+});
 
 function playerCardEl(idx) { return document.getElementById('pcard' + idx); }
 

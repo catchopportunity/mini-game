@@ -18,7 +18,7 @@ const sharedGlobals = {
   // js/board-data.js
   GROUPS: 'readonly', CITY_DEF: 'readonly', TAX_IDX: 'readonly', GOLDENKEY_IDX: 'readonly',
   COMPOUND_IDX: 'readonly', TRUST_IDX: 'readonly', CASINO_IDX: 'readonly', TILES: 'readonly',
-  tilePos: 'readonly',
+  BOARD_COLS: 'readonly', BOARD_ROWS: 'readonly', tilePos: 'readonly',
   // js/economy.js
   groupFullyOwned: 'readonly', tierName: 'readonly', STAR_TOLL_MULT: 'readonly',
   LANDMARK_TOLL_MULT: 'readonly', getToll: 'readonly', buildCost: 'readonly',
@@ -54,7 +54,7 @@ const sharedGlobals = {
   tileEls: 'readonly', createBoard: 'readonly', render: 'readonly', chargeState: 'writable',
   startCharge: 'readonly', releaseCharge: 'readonly', renderActions: 'readonly',
   openRules: 'readonly', closeRules: 'readonly', updateBotCountUI: 'readonly',
-  playerCardEl: 'readonly', flyMoney: 'readonly',
+  playerCardEl: 'readonly', flyMoney: 'readonly', drawBoardPath: 'readonly',
 };
 
 export default [

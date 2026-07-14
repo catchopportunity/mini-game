@@ -52,11 +52,14 @@ CITY_DEF.forEach(([idx, name, price, landmarkName, landmarkIcon], order) => {
   };
 });
 
+// 40칸을 8열 x 5행에 빈틈없이 채우는 지그재그(스네이크) 경로.
+// 짝수 행은 왼쪽→오른쪽, 홀수 행은 오른쪽→왼쪽으로 이어져서 항상 인접한 칸으로만 이동한다.
+const BOARD_COLS = 8;
+const BOARD_ROWS = 40 / BOARD_COLS;
+
 function tilePos(i) {
-  let row, col;
-  if (i <= 10) { row = 11; col = 11 - i; }
-  else if (i <= 20) { row = 11 - (i - 10); col = 1; }
-  else if (i <= 30) { row = 1; col = 1 + (i - 20); }
-  else { row = 1 + (i - 30); col = 11; }
-  return { row, col };
+  const rowIdx = Math.floor(i / BOARD_COLS);
+  const posInRow = i % BOARD_COLS;
+  const colIdx = rowIdx % 2 === 0 ? posInRow : BOARD_COLS - 1 - posInRow;
+  return { row: rowIdx + 1, col: colIdx + 1 };
 }
