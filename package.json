@@ -1,0 +1,14 @@
+{
+  "name": "mini-game",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint": "eslint .",
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1",
+    "eslint": "^9.9.0",
+    "globals": "^15.9.0"
+  }
+}
