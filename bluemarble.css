@@ -119,11 +119,16 @@ h1 {
 
 .tile.monopoly {
   border-color: var(--mono-color, #fbbf24);
-  animation: monopolyGlow 1.8s ease-in-out infinite;
+  animation: monopolyGlow 2.4s ease-in-out infinite;
 }
+/* 독점 칸이 그룹당 4개까지 동시에 애니메이션돌 수 있어 blur 반경을 크게/이중으로 두면
+   모바일에서 부담이 커진다 — 단일·저반경 box-shadow로 가볍게 유지 */
 @keyframes monopolyGlow {
   0%, 100% { box-shadow: 0 0 3px 1px var(--mono-color, #fbbf24); }
-  50% { box-shadow: 0 0 12px 4px var(--mono-color, #fbbf24), 0 0 22px 8px var(--mono-color, #fbbf24); }
+  50% { box-shadow: 0 0 8px 2px var(--mono-color, #fbbf24); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tile.monopoly { animation: none; box-shadow: 0 0 5px 1px var(--mono-color, #fbbf24); }
 }
 
 .tile.corner { font-size: clamp(7.6px, calc(var(--cell, 72px) * 0.14), 11px); align-items: center; justify-content: center; text-align: center; }
@@ -134,7 +139,9 @@ h1 {
 #boardPath { position: absolute; inset: 0; pointer-events: none; z-index: 0; overflow: visible; }
 #boardPath path {
   /* 선의 대부분은 칸(z-index 위) 밑에 가려지고, 칸 사이 틈(gap: 10px)에서만 보인다.
-     그 좁은 틈에서도 확실히 눈에 띄도록 굵고 밝게, 대시 주기도 틈보다 훨씬 짧게 잡는다. */
+     그 좁은 틈에서도 확실히 눈에 띄도록 굵고 밝게, 대시 주기도 틈보다 훨씬 짧게 잡는다.
+     drop-shadow 필터는 애니메이션과 같이 쓰면 프레임마다 블러를 다시 계산해야 해서
+     모바일에서 렉을 유발하므로 쓰지 않고, 밝은 stroke 색상만으로 존재감을 낸다. */
   fill: none;
   stroke: #f0abfc;
   stroke-width: 5;
@@ -142,8 +149,10 @@ h1 {
   stroke-linejoin: round;
   stroke-dasharray: 3 3;
   opacity: 1;
-  filter: drop-shadow(0 0 4px rgba(240,171,252,0.9)) drop-shadow(0 0 8px rgba(167,139,250,0.6));
-  animation: boardPathFlow 0.6s linear infinite;
+  animation: boardPathFlow 2s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  #boardPath path { animation: none; }
 }
 @keyframes boardPathFlow { to { stroke-dashoffset: -24; } }
 .tile .tokens { position: absolute; bottom: 5px; left: 2px; display: flex; gap: 2px; }
