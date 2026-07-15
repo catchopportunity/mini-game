@@ -42,15 +42,18 @@ const sharedGlobals = {
   botWantsToBuy: 'readonly', botWantsToBuild: 'readonly', botWantsToBuildLandmark: 'readonly',
   botWantsToAcquire: 'readonly', chooseBotCard: 'readonly', collectorDiscount: 'readonly',
   safetyBuffer: 'readonly', BOT_NET_WORTH_SAFETY_RATE: 'readonly',
+  // js/auction-debt.js
+  auctionAsset: 'readonly', liquidateAsset: 'readonly', maxDebtRoom: 'readonly',
+  ensureFunds: 'readonly', repayDebt: 'readonly',
+  // js/world-events.js
+  wormholePair: 'writable', activeGlobalEvent: 'writable', globalEventTurnsLeft: 'writable',
+  pickWormholePair: 'readonly', maybeTriggerGlobalEvent: 'readonly', tickGlobalEvent: 'readonly',
   // js/engine.js
   players: 'writable', pot: 'writable', current: 'writable', phase: 'writable',
   interrupted: 'writable', pendingCharge: 'writable', pendingCardChoice: 'writable',
-  botCount: 'writable', wormholePair: 'writable', activeGlobalEvent: 'writable',
-  globalEventTurnsLeft: 'writable',
+  botCount: 'writable',
   botThinking: 'writable', gameEpoch: 'writable', schedule: 'readonly', initGame: 'readonly',
-  pickWormholePair: 'readonly', maybeTriggerGlobalEvent: 'readonly', tickGlobalEvent: 'readonly',
-  auctionAsset: 'readonly', liquidateAsset: 'readonly', maxDebtRoom: 'readonly', repayDebt: 'readonly',
-  log: 'readonly', ensureFunds: 'readonly', chargePlayer: 'readonly',
+  log: 'readonly', chargePlayer: 'readonly',
   chargePlayerInteractive: 'readonly', sellAssetForPending: 'readonly', bankrupt: 'readonly',
   showOverlay: 'readonly', showEventCard: 'readonly', showKeyCard: 'readonly',
   maybeCelebrateMonopoly: 'readonly', startTurn: 'readonly', proceedNormalStart: 'readonly',
