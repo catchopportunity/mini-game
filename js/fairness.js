@@ -8,7 +8,6 @@ function opponentOf(p) {
 function payAmount(p, rate) { return Math.max(1, Math.round(netWorth(p) * rate)); }
 // 상대와 5배 이상 격차로 뒤처진 플레이어(사람 전용)에게는 획득액을 대폭 증폭
 function isDesperate(player) {
-  if (activeGlobalEvent?.key === 'audit') return false; // 공정 감사 기간엔 숨겨진 보정 전면 정지
   const oppWorth = netWorth(opponentOf(player));
   const myWorth = Math.max(1, netWorth(player));
   return oppWorth / myWorth >= DESPERATION_RATIO_CAP;
@@ -23,7 +22,6 @@ function gainAmount(p, rate) {
 // 3제곱이면 5배 상한 근처가 아닌 이상 거의 안 켜져서(2배 격차=1.6%), 세금처럼 한 방에
 // 훅 가는 위험 앞에서 도움이 안 되는 문제가 있었음 — 제곱으로 완만하게 해서 중간 구간도 보호.
 function desperationLevel(player) {
-  if (activeGlobalEvent?.key === 'audit') return 0; // 공정 감사 기간엔 숨겨진 보정 전면 정지
   const opponent = opponentOf(player);
   const myWorth = Math.max(1, netWorth(player));
   const oppWorth = netWorth(opponent);

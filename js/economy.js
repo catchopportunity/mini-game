@@ -60,7 +60,8 @@ function trustDividend(tile) {
   return Math.round(tile.price * TRUST_DIVIDEND_RATE);
 }
 
-// 현금 + 보유 부동산(땅값+건물 투자금, 복리 상가·투자 신탁 포함) 가치의 합 — 세금 산정 기준
+// 현금 + 보유 부동산(땅값+건물 투자금, 복리 상가·투자 신탁 포함) - 부채 — 세금·은근한 난이도 보정 산정 기준.
+// 부채를 그대로 반영해서, 빚을 진 플레이어는 순자산이 낮게 잡혀 보정(유리한 카드/주사위)이 더 잘 켜진다.
 function netWorth(player) {
   const realEstate = TILES.reduce((sum, t) => {
     if (!t || t.owner !== player.idx) return sum;
@@ -68,7 +69,7 @@ function netWorth(player) {
     if (t.type === 'compound' || t.type === 'trust') return sum + t.price;
     return sum;
   }, 0);
-  return player.cash + realEstate;
+  return Math.max(0, player.cash + realEstate - (player.debt || 0));
 }
 
 function taxAmount(player) {

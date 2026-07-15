@@ -100,8 +100,9 @@ test.describe('봇 AI', () => {
       players[1].pos = 2; // 마닐라, 70만원
       resolveTile(players[1], false);
     });
-    // BOT_THINK_DELAY(최대 1900ms) 이후 자동 결정
-    await expect(page.locator('#cash1')).toHaveText('930만원', { timeout: 3000 }); // 1000 - 70
+    // BOT_THINK_DELAY(최대 1900ms) 이후 자동 결정 — 병렬 워커로 여러 브라우저가 동시에 돌 때도
+    // 여유 있게 통과하도록 타임아웃을 넉넉히 잡는다
+    await expect(page.locator('#cash1')).toHaveText('930만원', { timeout: 6000 }); // 1000 - 70
   });
 });
 
@@ -194,27 +195,27 @@ test.describe('강제 매각 옥션', () => {
 });
 
 test.describe('부채 시스템', () => {
-  test('자산이 없어도 최소 신용대출 한도 내에서는 파산 대신 대출로 메꾼다', async ({ page }) => {
+  test('부동산을 다 팔아도 무담보 신용대출(1000) 한도 내에서는 파산 대신 대출로 메꾼다', async ({ page }) => {
     await page.goto('/bluemarble.html');
     const result = await page.evaluate(() => {
       players[0].cash = 0;
       players[0].debt = 0;
-      const ok = ensureFunds(players[0], 80); // MIN_DEBT_CAP(100) 이내
+      const ok = ensureFunds(players[0], 800); // MIN_DEBT_CAP(1000) 이내
       return { ok, cash: players[0].cash, debt: players[0].debt };
     });
     expect(result.ok).toBe(true);
-    expect(result.debt).toBe(80);
-    expect(result.cash).toBe(80);
+    expect(result.debt).toBe(800);
+    expect(result.cash).toBe(800);
   });
 
-  test('플레이어 순자산 계산은 부채를 빼지 않는다 (보정 악용 방지)', async ({ page }) => {
+  test('플레이어 순자산 계산은 부채를 뺀다 (빚질수록 은근한 난이도 보정이 더 잘 켜짐)', async ({ page }) => {
     await page.goto('/bluemarble.html');
     const nw = await page.evaluate(() => {
       players[0].cash = 500;
       players[0].debt = 400;
       return netWorth(players[0]);
     });
-    expect(nw).toBe(500); // 부채가 빠지지 않아야 함
+    expect(nw).toBe(100); // 500 - 400
   });
 });
 
