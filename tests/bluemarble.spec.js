@@ -52,7 +52,7 @@ test.describe('매입 흐름', () => {
 });
 
 test.describe('세금 계산', () => {
-  test('세금 칸은 (현금+자산가치)의 10%를 즉시 징수하고, 남은 현금의 절반이 추가로 소각된다', async ({ page }) => {
+  test('세금 칸은 (현금+자산가치)의 10%를 즉시 징수하고, 남은 현금의 25%가 추가로 소각된다', async ({ page }) => {
     await page.goto('/bluemarble.html');
     await page.evaluate(() => {
       current = 0;
@@ -60,8 +60,23 @@ test.describe('세금 계산', () => {
       players[0].cash = 500;
       resolveTile(players[0], false);
     });
-    // 1) 세금 500*0.1=50 징수 → 450 2) 남은 450의 절반(225) 소각 → 225
-    await expect(page.locator('#cash0')).toHaveText('225만원');
+    // 1) 세금 500*0.1=50 징수 → 450  2) 남은 450의 25%(113) 소각 → 337
+    await expect(page.locator('#cash0')).toHaveText('337만원');
+  });
+});
+
+test.describe('은근한 난이도 조정', () => {
+  test('±1칸 후보가 전부 비용을 내야 하는 칸이면, 실제 금액이 가장 적은 칸으로 유도한다', async ({ page }) => {
+    await page.goto('/bluemarble.html');
+    const chosenSum = await page.evaluate(() => {
+      current = 0;
+      players[0].pos = 0;
+      players[0].cash = 500;
+      // 베이징(idx7,통행료15) · 오사카(idx8,17) · 상하이(idx9,18) 모두 라이벌 소유로 세팅
+      [7, 8, 9].forEach(i => { TILES[i].owner = 1; TILES[i].stars = 0; });
+      return luckyAdjust(players[0], 8); // 원래 합(8)의 기본 착지는 오사카(17) — 더 싼 베이징(7)으로 유도돼야 함
+    });
+    expect(chosenSum).toBe(7);
   });
 });
 

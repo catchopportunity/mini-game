@@ -451,9 +451,9 @@ function resolveTile(player, wasDouble) {
       chargePlayerInteractive(player, amt, { toPot: true }, () => {
         // 보험증서로 세금 자체를 면제받았다면 뒤따르는 소각도 함께 면제 — "완전 면제"가 절반짜리가 되지 않도록
         if (!player.eliminated && !shielded) {
-          const burnAmt = Math.round(player.cash * 0.5);
+          const burnAmt = Math.round(player.cash * TAX_BURN_RATE);
           player.cash -= burnAmt;
-          log(`🔥 ${player.name}, 남은 현금의 절반 ${burnAmt}만원이 그대로 소각되었습니다!`);
+          log(`🔥 ${player.name}, 남은 현금의 ${Math.round(TAX_BURN_RATE * 100)}% ${burnAmt}만원이 그대로 소각되었습니다!`);
           SFX.tax();
           render();
         }

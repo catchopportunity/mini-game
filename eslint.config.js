@@ -7,7 +7,8 @@ import globals from 'globals';
 const sharedGlobals = {
   // js/constants.js
   fmt: 'readonly', DELAY: 'readonly', STEP_DELAY: 'readonly', PLAYER_COLORS: 'readonly',
-  SALARY: 'readonly', TIER_NAMES: 'readonly', TAX_RATE: 'readonly', LAP_POT_SHARE: 'readonly',
+  SALARY: 'readonly', TIER_NAMES: 'readonly', TAX_RATE: 'readonly', TAX_BURN_RATE: 'readonly',
+  LAP_POT_SHARE: 'readonly',
   COMPOUND_TOLL_CAP_HITS: 'readonly', TRUST_DIVIDEND_RATE: 'readonly',
   DESPERATION_RATIO_CAP: 'readonly', DESPERATE_GAIN_BOOST: 'readonly',
   CHARGE_MAX_MS: 'readonly', CHARGE_WOBBLE: 'readonly', BOT_THINK_DELAY: 'readonly',
@@ -27,8 +28,8 @@ const sharedGlobals = {
   trustDividend: 'readonly', netWorth: 'readonly', taxAmount: 'readonly',
   // js/fairness.js
   opponentOf: 'readonly', payAmount: 'readonly', isDesperate: 'readonly', gainAmount: 'readonly',
-  desperationLevel: 'readonly', tileFavorability: 'readonly', luckyAdjust: 'readonly',
-  diceForSum: 'readonly',
+  desperationLevel: 'readonly', tileCashCost: 'readonly', tileFavorability: 'readonly',
+  luckyAdjust: 'readonly', diceForSum: 'readonly',
   // js/cards.js
   spend: 'readonly', spendToPot: 'readonly', CARDS: 'readonly', pickCard: 'readonly', cardText: 'readonly',
   // js/bots.js

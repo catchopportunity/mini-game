@@ -8,6 +8,7 @@ const SALARY = 500;
 const TIER_NAMES = ['빈 땅', '별장', '빌딩', '호텔', '리조트', '마천루'];
 
 const TAX_RATE = 0.1; // 세금 = (현금 + 부동산 가치) * TAX_RATE
+const TAX_BURN_RATE = 0.25; // 세금 납부 후, 남은 현금 중 이 비율만큼 추가로 소각 (기존 0.5는 너무 가혹해서 완화)
 const LAP_POT_SHARE = 0.2; // 한 바퀴 돌 때 쌓인 세금(중앙기금)의 이 비율을 급여에 얹어줌
 const COMPOUND_TOLL_CAP_HITS = 9; // 통행료 배증은 최대 512배까지만
 const TRUST_DIVIDEND_RATE = 0.15;
