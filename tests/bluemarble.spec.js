@@ -175,3 +175,92 @@ test.describe('황금열쇠 신규 메커니즘', () => {
     await expect(page.locator('#log')).toContainText('🔑');
   });
 });
+
+test.describe('강제 매각 옥션', () => {
+  test('입찰 여력이 충분한 상대가 있으면 은행가(50%)보다 높은 가격에 낙찰되고 소유권이 넘어간다', async ({ page }) => {
+    await page.goto('/bluemarble.html');
+    const result = await page.evaluate(() => {
+      const tile = TILES[1]; // 방콕, price 60
+      tile.owner = 0; tile.stars = 0;
+      players[1].cash = 100000; // 입찰 여력 충분
+      const before = players[1].cash;
+      const amount = liquidateAsset(tile, players[0]);
+      return { amount, ownerAfter: tile.owner, bidderCashDrop: before - players[1].cash, assetValueBankFloor: Math.floor(assetValue(TILES[1]) * AUCTION_BANK_RATE) };
+    });
+    expect(result.ownerAfter).toBe(1); // 봇이 낙찰
+    expect(result.amount).toBeGreaterThan(result.assetValueBankFloor);
+    expect(result.bidderCashDrop).toBe(result.amount);
+  });
+});
+
+test.describe('부채 시스템', () => {
+  test('자산이 없어도 최소 신용대출 한도 내에서는 파산 대신 대출로 메꾼다', async ({ page }) => {
+    await page.goto('/bluemarble.html');
+    const result = await page.evaluate(() => {
+      players[0].cash = 0;
+      players[0].debt = 0;
+      const ok = ensureFunds(players[0], 80); // MIN_DEBT_CAP(100) 이내
+      return { ok, cash: players[0].cash, debt: players[0].debt };
+    });
+    expect(result.ok).toBe(true);
+    expect(result.debt).toBe(80);
+    expect(result.cash).toBe(80);
+  });
+
+  test('플레이어 순자산 계산은 부채를 빼지 않는다 (보정 악용 방지)', async ({ page }) => {
+    await page.goto('/bluemarble.html');
+    const nw = await page.evaluate(() => {
+      players[0].cash = 500;
+      players[0].debt = 400;
+      return netWorth(players[0]);
+    });
+    expect(nw).toBe(500); // 부채가 빠지지 않아야 함
+  });
+});
+
+test.describe('고정 웜홀', () => {
+  test('웜홀 한쪽에 도착하면 즉시 반대편으로 이어진다', async ({ page }) => {
+    await page.goto('/bluemarble.html');
+    const posAfter = await page.evaluate(() => {
+      wormholePair = [1, 9];
+      current = 0;
+      players[0].pos = 1;
+      resolveTile(players[0], false);
+      return players[0].pos;
+    });
+    expect(posAfter).toBe(9);
+  });
+});
+
+test.describe('글로벌 이벤트', () => {
+  test('경제 위기 기간엔 통행료가 반값, 세율은 2배가 된다', async ({ page }) => {
+    await page.goto('/bluemarble.html');
+    const result = await page.evaluate(() => {
+      const tile = TILES[1]; // 방콕, tollBase 9
+      tile.owner = 1; tile.stars = 0;
+      const normalToll = getToll(tile);
+      const normalTax = taxAmount(players[0]);
+      activeGlobalEvent = GLOBAL_EVENTS.find(e => e.key === 'crisis');
+      const crisisToll = getToll(tile);
+      const crisisTax = taxAmount(players[0]);
+      activeGlobalEvent = null;
+      return { normalToll, crisisToll, normalTax, crisisTax };
+    });
+    expect(result.crisisToll).toBe(Math.round(result.normalToll * 0.5));
+    expect(result.crisisTax).toBe(result.normalTax * 2);
+  });
+});
+
+test.describe('봇 성격', () => {
+  test('수전노 성향은 기본 배율(1x)보다 1.6배 큰 안전 버퍼를 요구한다', async ({ page }) => {
+    await page.goto('/bluemarble.html');
+    const result = await page.evaluate(() => {
+      players[1].personality = null; // 게임 시작 시 무작위 배정된 성격을 지우고 중립 기준선부터 비교
+      const base = safetyBuffer(players[1], BOT_BUY_BUFFER);
+      players[1].personality = BOT_PERSONALITIES.find(p => p.key === 'miser');
+      const miserBuffer = safetyBuffer(players[1], BOT_BUY_BUFFER);
+      return { base, miserBuffer };
+    });
+    expect(result.miserBuffer).toBeCloseTo(result.base * 1.6, 5);
+  });
+});

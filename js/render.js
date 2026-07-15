@@ -100,12 +100,16 @@ function render() {
   }
   players.forEach((p, i) => {
     const nameEl = document.querySelector('#pcard' + i + ' .name');
-    if (nameEl) nameEl.textContent = (p.isBot ? '🤖 ' : '🧑 ') + p.name + (p.eliminated ? ' 💀' : '');
+    const personalityTag = p.personality ? ` ${p.personality.icon}${p.personality.label}` : '';
+    if (nameEl) nameEl.textContent = (p.isBot ? '🤖 ' : '🧑 ') + p.name + personalityTag + (p.eliminated ? ' 💀' : '');
     document.getElementById('cash' + i).textContent = fmt(p.cash);
     const owned = TILES.filter(t => t && t.owner === i &&
       (t.type === 'city' || t.type === 'compound' || t.type === 'trust'));
     const totalValue = owned.reduce((sum, t) => sum + assetValue(t), 0);
-    document.getElementById('props' + i).textContent = p.eliminated ? '탈락' : `보유 자산 ${owned.length}개 (${fmt(totalValue)})` + (p.stuck ? ` · 🏝️무인도(${p.jailTurns}/2)` : '');
+    let propsText = p.eliminated ? '탈락' : `보유 자산 ${owned.length}개 (${fmt(totalValue)})`;
+    if (!p.eliminated && p.stuck) propsText += ` · 🏝️무인도(${p.jailTurns}/2)`;
+    if (!p.eliminated && p.debt > 0) propsText += ` · 🏦부채 ${fmt(p.debt)}`;
+    document.getElementById('props' + i).textContent = propsText;
     document.getElementById('pcard' + i).classList.toggle('turn', current === i && phase !== 'gameover');
   });
 
@@ -113,6 +117,7 @@ function render() {
     if (!tile) return;
     const el = tileEls[i];
     if (!el) return;
+    el.classList.toggle('wormhole', !!(wormholePair && wormholePair.includes(i)));
     if (tile.type === 'city') {
       const strip = el.querySelector('.owner-strip');
       const stageEl = el.querySelector('.stage');
@@ -161,7 +166,8 @@ function render() {
     }
   });
 
-  document.getElementById('pot').textContent = `중앙기금 💰 ${pot}만원`;
+  document.getElementById('pot').textContent = `중앙기금 💰 ${pot}만원` +
+    (activeGlobalEvent ? ` · ${activeGlobalEvent.icon} ${activeGlobalEvent.label}(${globalEventTurnsLeft}턴) — ${activeGlobalEvent.desc}` : '');
   const p = players[current];
   document.getElementById('turnLabel').textContent = phase === 'gameover' ? '게임 종료' :
     (p.isBot ? `🤖 ${p.name}의 턴` + (botThinking ? ' · 생각 중...' : '') : '🧑 내 턴');
@@ -304,16 +310,16 @@ function renderActions() {
     const need = pendingCharge.amount;
     const short = Math.max(0, need - p.cash);
     promptBox.style.display = 'block';
-    promptBox.textContent = `자금 부족! ${need}만원 필요 (보유 ${p.cash}만원, ${short}만원 부족) — 매각할 자산을 직접 고르세요`;
+    promptBox.textContent = `자금 부족! ${need}만원 필요 (보유 ${p.cash}만원, ${short}만원 부족) — 매각할 자산을 직접 고르세요 (경매에 부쳐 은행가보다 더 받을 수도 있어요)`;
     const owned = TILES.filter(t => t && t.owner === p.idx &&
       (t.type === 'city' || t.type === 'compound' || t.type === 'trust'))
       .sort((a, b) => assetValue(b) - assetValue(a));
     owned.forEach(t => {
       const idx = TILES.indexOf(t);
-      const refund = Math.floor(assetValue(t) * 0.5);
+      const bankFloor = Math.floor(assetValue(t) * AUCTION_BANK_RATE);
       const btn = document.createElement('button');
       btn.className = 'secondary';
-      btn.textContent = `${t.name} 매각 (+${refund})`;
+      btn.textContent = `${t.name} 매각 (최소 +${bankFloor})`;
       btn.onclick = () => sellAssetForPending(idx);
       actionRow.appendChild(btn);
     });
@@ -340,6 +346,14 @@ function renderActions() {
     if (p.stuck) {
       promptBox.style.display = 'block';
       promptBox.textContent = `🏝️ 무인도에 갇혔습니다! 더블이 나오면 탈출 (실패 ${p.jailTurns}/2턴, 2턴 차면 강제 석방)`;
+    }
+    if (p.debt > 0) {
+      const repayBtn = document.createElement('button');
+      repayBtn.className = 'secondary';
+      repayBtn.textContent = `🏦 부채 상환 (${fmt(Math.min(p.cash, p.debt))})`;
+      repayBtn.disabled = p.cash <= 0;
+      repayBtn.onclick = repayDebt;
+      actionRow.appendChild(repayBtn);
     }
     const rollBtn = document.createElement('button');
     rollBtn.id = 'rollBtn';

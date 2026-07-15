@@ -136,6 +136,17 @@ h1 {
 .tile.corner .nm { font-size: 1em; padding-right: 0; white-space: normal; overflow: visible; text-overflow: clip; }
 .tile .owner-strip { position: absolute; bottom: 0; left: 0; right: 0; height: 4px; }
 
+.tile.wormhole { border-color: #22d3ee; }
+.tile.wormhole::before {
+  content: '🕳️';
+  position: absolute;
+  top: 1px;
+  left: 2px;
+  font-size: 1em;
+  filter: drop-shadow(0 0 2px rgba(34,211,238,0.8));
+  z-index: 2;
+}
+
 #boardPath { position: absolute; inset: 0; pointer-events: none; z-index: 0; overflow: visible; }
 #boardPath path {
   /* 선의 대부분은 칸(z-index 위) 밑에 가려지고, 칸 사이 틈(gap: 10px)에서만 보인다.

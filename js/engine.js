@@ -4,6 +4,9 @@ let pendingCharge = null; // { player, amount, opts, onDone } while awaiting-ass
 let pendingCardChoice = null; // { player, optionA, optionB, afterResolve } while awaiting-card-choice
 let botCount = 1;
 let botThinking = false;
+let wormholePair = null; // [tileIdxA, tileIdxB] — 매 게임 무작위로 정해지는 고정 통로
+let activeGlobalEvent = null; // GLOBAL_EVENTS 중 하나 또는 null
+let globalEventTurnsLeft = 0;
 
 // 새 게임이 시작되면 이전 게임에서 예약된 setTimeout이 뒤늦게 실행돼 리셋된 상태를 건드리지 않도록 세대 값으로 무효화
 let gameEpoch = 0;
@@ -12,21 +15,35 @@ function schedule(fn, delay) {
   return setTimeout(() => { if (epoch === gameEpoch) fn(); }, delay);
 }
 
+// 도시 타일 중 서로 연결된 2칸을 무작위로 골라 "고정 웜홀"로 만든다 — 도착 즉시 서로에게 이어짐
+function pickWormholePair() {
+  const cityIdxs = TILES.map((t, i) => (t && t.type === 'city') ? i : -1).filter(i => i >= 0);
+  const a = cityIdxs[Math.floor(Math.random() * cityIdxs.length)];
+  let b = cityIdxs[Math.floor(Math.random() * cityIdxs.length)];
+  while (b === a) b = cityIdxs[Math.floor(Math.random() * cityIdxs.length)];
+  return [a, b];
+}
+
 function initGame() {
   gameEpoch++;
   TILES.forEach(t => {
-    if (t.type === 'city') { t.owner = null; t.stars = 0; t.landmark = false; t.stageLap = null; }
+    if (t.type === 'city') { t.owner = null; t.stars = 0; t.landmark = false; t.stageLap = null; t.tollBoost = false; }
     else if (t.type === 'compound') { t.owner = null; t.hits = 0; }
     else if (t.type === 'trust') { t.owner = null; }
   });
+  wormholePair = pickWormholePair();
+  activeGlobalEvent = null;
+  globalEventTurnsLeft = 0;
   players = [
-    { idx: 0, name: '플레이어', isBot: false, cash: 100, pos: 0, stuck: false, jailTurns: 0, doublesCount: 0, lapCount: 0, taxExempt: false, paymentShield: false, buildDiscount: null, badLuck: false, eliminated: false },
+    { idx: 0, name: '플레이어', isBot: false, cash: 100, pos: 0, stuck: false, jailTurns: 0, doublesCount: 0, lapCount: 0, taxExempt: false, paymentShield: false, buildDiscount: null, badLuck: false, debt: 0, eliminated: false },
   ];
+  const shuffledPersonalities = [...BOT_PERSONALITIES].sort(() => Math.random() - 0.5);
   for (let i = 0; i < botCount; i++) {
     players.push({
       idx: i + 1,
       name: botCount === 1 ? '봇' : `${i + 1}호봇`,
-      isBot: true, cash: 1000, pos: 0, stuck: false, jailTurns: 0, doublesCount: 0, lapCount: 0, taxExempt: false, paymentShield: false, buildDiscount: null, badLuck: false, eliminated: false,
+      isBot: true, cash: 1000, pos: 0, stuck: false, jailTurns: 0, doublesCount: 0, lapCount: 0, taxExempt: false, paymentShield: false, buildDiscount: null, badLuck: false, debt: 0, eliminated: false,
+      personality: shuffledPersonalities[i % shuffledPersonalities.length],
     });
   }
   pot = 0;
@@ -37,6 +54,10 @@ function initGame() {
   document.getElementById('overlay').style.display = 'none';
   current = Math.floor(Math.random() * players.length);
   log('🎮 새 게임 시작! ' + players[current].name + '가 먼저 시작합니다.');
+  if (botCount > 0) {
+    const intro = players.filter(p => p.isBot).map(p => `${p.personality.icon} ${p.name}(${p.personality.label})`).join(', ');
+    log(`🤖 봇 성향: ${intro}`);
+  }
   render();
   startTurn(current);
 }
@@ -49,6 +70,46 @@ function log(msg) {
   while (el.children.length > 60) el.removeChild(el.lastChild);
 }
 
+// 강제 매각 옥션 — 은행에 반값으로 넘기는 대신, 다른 활성 플레이어들에게 입찰을 붙여 더 받을 기회를 준다.
+// 입찰자가 없거나 은행 제시가보다 낮으면 기존처럼 은행에 매각(소유권 초기화).
+function auctionAsset(tile, seller) {
+  const bankOffer = Math.floor(assetValue(tile) * AUCTION_BANK_RATE);
+  const bidders = players.filter(p => p.idx !== seller.idx && !p.eliminated);
+  let bestBid = bankOffer;
+  let winner = null;
+  bidders.forEach(bidder => {
+    const willingness = Math.round(assetValue(tile) * (AUCTION_BID_MIN_RATE + Math.random() * (AUCTION_BID_MAX_RATE - AUCTION_BID_MIN_RATE)));
+    const room = bidder.cash - safetyBuffer(bidder, BOT_BUY_BUFFER);
+    const bid = Math.min(willingness, Math.max(0, room));
+    if (bid > bestBid) { bestBid = bid; winner = bidder; }
+  });
+  return { amount: bestBid, winner };
+}
+
+function liquidateAsset(tile, seller) {
+  const { amount, winner } = auctionAsset(tile, seller);
+  tile.owner = winner ? winner.idx : null;
+  if (winner) {
+    tile.stageLap = winner.lapCount;
+    winner.cash -= amount;
+    log(`🔨 ${seller.name}, ${tile.name} 강제 매각 — ${winner.name}이(가) 경매로 낙찰! (+${amount}만원)`);
+    flyMoney(playerCardEl(winner.idx), playerCardEl(seller.idx), amount);
+  } else {
+    if (tile.type === 'city') { tile.stars = 0; tile.landmark = false; tile.stageLap = null; }
+    if (tile.type === 'compound') tile.hits = 0;
+    log(`💵 ${seller.name}, ${tile.name} 매각 (은행, +${amount}만원)`);
+  }
+  seller.cash += amount;
+  return amount;
+}
+
+// 부동산 담보 한도 내에서만 대출 가능 — 부동산이 없어도 최소 신용대출(MIN_DEBT_CAP)까지는 가능
+function maxDebtRoom(player) {
+  const collateral = TILES.reduce((sum, t) => (t && t.owner === player.idx) ? sum + assetValue(t) : sum, 0);
+  const cap = Math.max(MIN_DEBT_CAP, collateral * MAX_DEBT_RATIO);
+  return Math.max(0, cap - player.debt);
+}
+
 function ensureFunds(player, amount) {
   if (player.cash >= amount) return true;
   const owned = TILES.filter(t => t && t.owner === player.idx &&
@@ -56,12 +117,18 @@ function ensureFunds(player, amount) {
     .sort((a, b) => assetValue(b) - assetValue(a));
   for (const t of owned) {
     if (player.cash >= amount) break;
-    const refund = Math.floor(assetValue(t) * 0.5);
-    t.owner = null;
-    if (t.type === 'city') { t.stars = 0; t.landmark = false; t.stageLap = null; }
-    if (t.type === 'compound') t.hits = 0;
-    player.cash += refund;
-    log(`💵 ${player.name}, ${t.name} 매각 (+${refund}만원)`);
+    liquidateAsset(t, player);
+  }
+  if (player.cash >= amount) return true;
+
+  // 자산을 다 팔아도 부족하면 파산 대신 담보 한도 내에서 대출로 메꿔본다
+  const shortfall = amount - player.cash;
+  const room = maxDebtRoom(player);
+  if (room > 0) {
+    const borrowed = Math.min(shortfall, room);
+    player.debt += borrowed;
+    player.cash += borrowed;
+    log(`🏦 ${player.name}, 대출로 ${borrowed}만원을 마련했습니다. (누적 부채 ${player.debt}만원)`);
   }
   return player.cash >= amount;
 }
@@ -107,12 +174,7 @@ function sellAssetForPending(tileIdx) {
   SFX.click();
   const t = TILES[tileIdx];
   const p = pendingCharge.player;
-  const refund = Math.floor(assetValue(t) * 0.5);
-  t.owner = null;
-  if (t.type === 'city') { t.stars = 0; t.landmark = false; t.stageLap = null; }
-  if (t.type === 'compound') t.hits = 0;
-  p.cash += refund;
-  log(`💵 ${p.name}, ${t.name} 매각 (+${refund}만원)`);
+  liquidateAsset(t, p);
   const stillOwned = TILES.filter(tl => tl && tl.owner === p.idx &&
     (tl.type === 'city' || tl.type === 'compound' || tl.type === 'trust'));
   if (p.cash >= pendingCharge.amount || stillOwned.length === 0) {
@@ -229,6 +291,25 @@ function maybeCelebrateMonopoly(player, tile, cb) {
     showEventCard('🎉', 'MONOPOLY', player.name, `${g.name} 지역 독점 완료! 통행료가 대폭 상승합니다.`, cb);
   } else {
     cb();
+  }
+}
+
+// 출발점을 통과할 때마다 이 확률로 새 글로벌 이벤트가 발동한다 (이미 진행 중이면 스킵)
+function maybeTriggerGlobalEvent() {
+  if (activeGlobalEvent || Math.random() >= GLOBAL_EVENT_TRIGGER_CHANCE) return;
+  activeGlobalEvent = GLOBAL_EVENTS[Math.floor(Math.random() * GLOBAL_EVENTS.length)];
+  globalEventTurnsLeft = GLOBAL_EVENT_DURATION_TURNS;
+  log(`🌍 글로벌 이벤트 발생! ${activeGlobalEvent.icon} ${activeGlobalEvent.label} — ${activeGlobalEvent.desc} (${globalEventTurnsLeft}턴간)`);
+  SFX.monopoly();
+  render();
+}
+
+function tickGlobalEvent() {
+  if (!activeGlobalEvent) return;
+  globalEventTurnsLeft--;
+  if (globalEventTurnsLeft <= 0) {
+    log(`🌍 ${activeGlobalEvent.icon} ${activeGlobalEvent.label} 종료.`);
+    activeGlobalEvent = null;
   }
 }
 
@@ -365,6 +446,21 @@ function movePlayerBy(player, steps, cb) {
       if (dividend > 0) msg += ` + 투자 배당 +${dividend}만원`;
       log(msg);
       SFX.gain();
+      if (player.debt > 0) {
+        const interest = Math.round(player.debt * DEBT_INTEREST_RATE);
+        player.debt += interest;
+        log(`🏦 ${player.name}, 미상환 부채에 이자 +${interest}만원 (누적 부채 ${player.debt}만원)`);
+        if (player.isBot) {
+          const room = player.cash - safetyBuffer(player, BOT_BUY_BUFFER);
+          const repay = Math.min(Math.max(0, room), player.debt);
+          if (repay > 0) {
+            player.cash -= repay;
+            player.debt -= repay;
+            log(`🏦 ${player.name}, 여유 자금으로 부채 ${repay}만원 상환. (남은 부채 ${player.debt}만원)`);
+          }
+        }
+      }
+      maybeTriggerGlobalEvent();
     }
     render();
     schedule(hop, STEP_DELAY);
@@ -384,6 +480,18 @@ function effectiveLandmarkCost(player, tile) {
 
 function resolveTile(player, wasDouble) {
   if (phase === 'gameover') return;
+
+  // 고정 웜홀 통로 — 이 칸 자체의 효과는 처리하지 않고, 곧장 반대편으로 이어준다
+  if (wormholePair && wormholePair.includes(player.pos)) {
+    const dest = wormholePair[0] === player.pos ? wormholePair[1] : wormholePair[0];
+    log(`🕳️ ${player.name}, 고정 웜홀을 통과해 ${TILES[dest].name}(으)로 이동했습니다!`);
+    SFX.warp();
+    player.pos = dest;
+    render();
+    schedule(() => resolveTile(player, wasDouble), DELAY);
+    return;
+  }
+
   const tile = TILES[player.pos];
   interrupted = false;
 
@@ -514,7 +622,7 @@ function resolveTile(player, wasDouble) {
           botThinking = true; render();
           schedule(() => {
             botThinking = false;
-            if (botWantsToBuy(player, tile.price)) {
+            if (botWantsToBuy(player, tile)) {
               player.cash -= tile.price;
               tile.owner = player.idx; tile.hits = 0;
               log(`🏪 ${player.name}, ${tile.name} 매입! (-${tile.price}만원)`);
@@ -548,7 +656,7 @@ function resolveTile(player, wasDouble) {
           botThinking = true; render();
           schedule(() => {
             botThinking = false;
-            if (botWantsToBuy(player, tile.price)) {
+            if (botWantsToBuy(player, tile)) {
               player.cash -= tile.price;
               tile.owner = player.idx;
               log(`📈 ${player.name}, ${tile.name} 매입! (-${tile.price}만원, 한 바퀴마다 +${trustDividend(tile)}만원 배당)`);
@@ -578,7 +686,7 @@ function resolveTile(player, wasDouble) {
           botThinking = true; render();
           schedule(() => {
             botThinking = false;
-            if (botWantsToBuy(player, tile.price)) {
+            if (botWantsToBuy(player, tile)) {
               player.cash -= tile.price;
               tile.owner = player.idx; tile.stars = 0; tile.stageLap = player.lapCount;
               log(`🏙️ ${player.name}, ${tile.name} 매입! (-${tile.price}만원)`);
@@ -858,8 +966,21 @@ function skipPostAcquireBuild() {
   finishPending();
 }
 
+function repayDebt() {
+  ensureAudio();
+  SFX.click();
+  const p = players[current];
+  const amount = Math.min(p.cash, p.debt);
+  if (amount <= 0) return;
+  p.cash -= amount;
+  p.debt -= amount;
+  log(`🏦 ${p.name}, 부채 ${amount}만원 상환. (남은 부채 ${p.debt}만원)`);
+  render();
+}
+
 function switchTurn() {
   if (phase === 'gameover') return;
+  tickGlobalEvent();
   do {
     current = (current + 1) % players.length;
   } while (players[current].eliminated);
