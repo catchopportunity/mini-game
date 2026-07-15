@@ -1,6 +1,7 @@
 // ---------- Game state & turn flow ----------
 let players, pot, current, phase, interrupted;
 let pendingCharge = null; // { player, amount, opts, onDone } while awaiting-asset-sale
+let pendingCardChoice = null; // { player, optionA, optionB, afterResolve } while awaiting-card-choice
 let botCount = 1;
 let botThinking = false;
 
@@ -19,13 +20,13 @@ function initGame() {
     else if (t.type === 'trust') { t.owner = null; }
   });
   players = [
-    { idx: 0, name: '플레이어', isBot: false, cash: 100, pos: 0, stuck: false, jailTurns: 0, doublesCount: 0, lapCount: 0, taxExempt: false, eliminated: false },
+    { idx: 0, name: '플레이어', isBot: false, cash: 100, pos: 0, stuck: false, jailTurns: 0, doublesCount: 0, lapCount: 0, taxExempt: false, paymentShield: false, buildDiscount: null, badLuck: false, eliminated: false },
   ];
   for (let i = 0; i < botCount; i++) {
     players.push({
       idx: i + 1,
       name: botCount === 1 ? '봇' : `${i + 1}호봇`,
-      isBot: true, cash: 1000, pos: 0, stuck: false, jailTurns: 0, doublesCount: 0, lapCount: 0, taxExempt: false, eliminated: false,
+      isBot: true, cash: 1000, pos: 0, stuck: false, jailTurns: 0, doublesCount: 0, lapCount: 0, taxExempt: false, paymentShield: false, buildDiscount: null, badLuck: false, eliminated: false,
     });
   }
   pot = 0;
@@ -82,6 +83,13 @@ function chargePlayer(player, amount, opts = {}) {
 // 사람이 강제 지불(통행료/세금)을 감당 못 하면 자동 매각 대신 직접 고를 기회를 줌.
 // 봇이거나 이미 감당 가능하거나 팔 게 없으면 기존과 동일하게 즉시 처리.
 function chargePlayerInteractive(player, amount, opts, onDone) {
+  if (player.paymentShield) {
+    player.paymentShield = false;
+    log(`☂️ ${player.name}, 보험증서로 지불(${amount}만원)을 면제받았습니다!`);
+    SFX.click();
+    onDone();
+    return;
+  }
   const owned = TILES.filter(t => t && t.owner === player.idx &&
     (t.type === 'city' || t.type === 'compound' || t.type === 'trust'));
   if (player.isBot || player.cash >= amount || owned.length === 0) {
@@ -171,6 +179,47 @@ function showKeyCard(who, text, cb) {
   showEventCard('🔑', 'GOLDEN KEY', who, text, cb);
 }
 
+// "두 장 중 선택" 카드: chooseFrom 카드 자체는 아무 효과가 없고, 대신 나머지 카드 중 서로 다른
+// 두 장을 뽑아 플레이어(또는 봇)가 하나를 골라 그 효과만 적용한다.
+function resolveCardChoice(player, wasDouble, afterResolve) {
+  const pool = CARDS.filter(c => !c.chooseFrom);
+  const optionA = pickCard(player, pool);
+  let optionB = pickCard(player, pool);
+  for (let guard = 0; optionB === optionA && guard < 20; guard++) optionB = pickCard(player, pool);
+  if (player.isBot) {
+    botThinking = true; render();
+    schedule(() => {
+      botThinking = false;
+      applyChosenCard(player, chooseBotCard(optionA, optionB), wasDouble, afterResolve);
+    }, thinkDelay());
+  } else {
+    pendingCardChoice = { player, optionA, optionB, wasDouble, afterResolve };
+    phase = 'awaiting-card-choice';
+    renderActions();
+  }
+}
+
+function applyChosenCard(player, card, wasDouble, afterResolve) {
+  const text = cardText(card, player);
+  log(`🔑 ${player.name}: ${text}`);
+  card.fn(player);
+  render();
+  if (card.warpTo) {
+    schedule(() => resolveTile(player, wasDouble), DELAY);
+  } else {
+    afterResolve();
+  }
+}
+
+function chooseCard(which) {
+  ensureAudio();
+  SFX.click();
+  const { player, optionA, optionB, wasDouble, afterResolve } = pendingCardChoice;
+  pendingCardChoice = null;
+  phase = 'resolving';
+  applyChosenCard(player, which === 'A' ? optionA : optionB, wasDouble, afterResolve);
+}
+
 // 도시 매입/인수로 그룹을 방금 독점했다면 축하 연출을 먼저 보여주고 cb 실행
 function maybeCelebrateMonopoly(player, tile, cb) {
   if (tile.type === 'city' && groupFullyOwned(player.idx, tile.group)) {
@@ -228,26 +277,34 @@ function chargedDie(chargeLevel) {
   return 1 + Math.floor(6 * Math.pow(Math.random(), exponent));
 }
 
+// 황금열쇠 "불운의 징조" 카드용 — chargedDie와 반대로 낮은 눈 쪽으로 편향
+function unluckyDie() {
+  return 1 + Math.floor(6 * Math.pow(Math.random(), 1.8));
+}
+
 function rollForCurrent(chargeLevel = 0) {
   if (phase !== 'idle') return;
   phase = 'rolling';
   const p = players[current];
-  let d1 = p.isBot ? 1 + Math.floor(Math.random() * 6) : chargedDie(chargeLevel);
-  let d2 = p.isBot ? 1 + Math.floor(Math.random() * 6) : chargedDie(chargeLevel);
+  const badLuck = p.badLuck;
+  if (badLuck) p.badLuck = false;
+  let d1 = badLuck ? unluckyDie() : (p.isBot ? 1 + Math.floor(Math.random() * 6) : chargedDie(chargeLevel));
+  let d2 = badLuck ? unluckyDie() : (p.isBot ? 1 + Math.floor(Math.random() * 6) : chargedDie(chargeLevel));
   const chargeTag = (!p.isBot && chargeLevel > 0.05) ? ` [차지 ${Math.round(Math.min(1, chargeLevel) * 100)}%]` : '';
+  const badLuckTag = badLuck ? ' [불운의 징조]' : '';
 
   if (p.stuck) {
     document.getElementById('diceDisplay').textContent = `🎲 ${d1} + ${d2} = ${d1 + d2}`;
     SFX.dice();
     if (d1 === d2) {
       p.stuck = false; p.jailTurns = 0;
-      log(`🎲 ${p.name}: ${d1} + ${d2} = ${d1 + d2}${chargeTag} (더블!) 🏝️ 무인도 탈출!`);
+      log(`🎲 ${p.name}: ${d1} + ${d2} = ${d1 + d2}${chargeTag}${badLuckTag} (더블!) 🏝️ 무인도 탈출!`);
       setTimeout(SFX.doubleDing, 150);
       // 탈출 굴림으로 이동은 하지만, 더블이어도 추가 굴림 보너스는 없음
       movePlayerBy(p, d1 + d2, () => resolveTile(p, false));
     } else {
       p.jailTurns++;
-      log(`🎲 ${p.name}: ${d1} + ${d2} = ${d1 + d2}${chargeTag}. 탈출 실패... (대기 ${p.jailTurns}/2턴)`);
+      log(`🎲 ${p.name}: ${d1} + ${d2} = ${d1 + d2}${chargeTag}${badLuckTag}. 탈출 실패... (대기 ${p.jailTurns}/2턴)`);
       SFX.jail();
       render();
       schedule(switchTurn, DELAY);
@@ -255,7 +312,8 @@ function rollForCurrent(chargeLevel = 0) {
     return;
   }
 
-  if (!p.isBot) {
+  // 불운의 징조가 발동한 굴림은 은근한 난이도 보정으로 다시 유리하게 덮어쓰지 않는다
+  if (!p.isBot && !badLuck) {
     const desperation = desperationLevel(p);
     if (desperation > 0 && Math.random() < desperation) {
       const adjustedSum = luckyAdjust(p, d1 + d2);
@@ -263,7 +321,7 @@ function rollForCurrent(chargeLevel = 0) {
     }
   }
   document.getElementById('diceDisplay').textContent = `🎲 ${d1} + ${d2} = ${d1 + d2}`;
-  log(`🎲 ${p.name}: ${d1} + ${d2} = ${d1 + d2}${chargeTag}` + (d1 === d2 ? ' (더블!)' : ''));
+  log(`🎲 ${p.name}: ${d1} + ${d2} = ${d1 + d2}${chargeTag}${badLuckTag}` + (d1 === d2 ? ' (더블!)' : ''));
   SFX.dice();
   if (d1 === d2) setTimeout(SFX.doubleDing, 150);
   renderActions();
@@ -312,6 +370,16 @@ function movePlayerBy(player, steps, cb) {
     schedule(hop, STEP_DELAY);
   };
   hop();
+}
+
+// 황금열쇠 "건설 할인권" 적용가 — 실제 소진은 건설이 확정 실행되는 시점에만 한다(가격 표시만으로는 소진 X)
+function effectiveBuildCost(player, tile) {
+  const base = buildCost(tile);
+  return player.buildDiscount ? Math.round(base * (1 - player.buildDiscount)) : base;
+}
+function effectiveLandmarkCost(player, tile) {
+  const base = landmarkCost(tile);
+  return player.buildDiscount ? Math.round(base * (1 - player.buildDiscount)) : base;
 }
 
 function resolveTile(player, wasDouble) {
@@ -377,10 +445,12 @@ function resolveTile(player, wasDouble) {
         break;
       }
       const amt = taxAmount(player);
+      const shielded = player.paymentShield; // chargePlayerInteractive가 이 값을 소비하기 전에 스냅샷
       log(`💸 ${player.name}, 재산세 ${amt}만원 납부. (자산 ${netWorth(player)}만원의 ${Math.round(TAX_RATE * 100)}%)`);
       SFX.tax();
       chargePlayerInteractive(player, amt, { toPot: true }, () => {
-        if (!player.eliminated) {
+        // 보험증서로 세금 자체를 면제받았다면 뒤따르는 소각도 함께 면제 — "완전 면제"가 절반짜리가 되지 않도록
+        if (!player.eliminated && !shielded) {
           const burnAmt = Math.round(player.cash * 0.5);
           player.cash -= burnAmt;
           log(`🔥 ${player.name}, 남은 현금의 절반 ${burnAmt}만원이 그대로 소각되었습니다!`);
@@ -394,22 +464,18 @@ function resolveTile(player, wasDouble) {
     case 'goldenkey': {
       const card = pickCard(player);
       SFX.card();
+      if (card.chooseFrom) {
+        resolveCardChoice(player, wasDouble, afterResolve);
+        break;
+      }
       const drawnText = cardText(card, player);
       showKeyCard(player.name, drawnText, () => {
         log(`🔑 ${player.name}: ${drawnText}`);
         card.fn(player);
         render();
-        if (card.drawAgain) {
-          const others = CARDS.filter(c => !c.drawAgain);
-          const card2 = pickCard(player, others);
-          SFX.card();
-          const drawnText2 = cardText(card2, player);
-          showKeyCard(player.name, drawnText2, () => {
-            log(`🔑 ${player.name}: ${drawnText2}`);
-            card2.fn(player);
-            render();
-            afterResolve();
-          });
+        if (card.warpTo) {
+          // 카드가 위치를 옮겼으니 이 턴 흐름을 끝내지 말고 새 위치의 칸 효과를 이어서 처리
+          schedule(() => resolveTile(player, wasDouble), DELAY);
         } else {
           afterResolve();
         }
@@ -535,7 +601,7 @@ function resolveTile(player, wasDouble) {
         const canBuildNext = tile.stars < 5 && lapCleared;
         const landmarkEligible = tile.stars === 5 && !tile.landmark && lapCleared;
         if (canBuildNext) {
-          const cost = buildCost(tile);
+          const cost = effectiveBuildCost(player, tile);
           if (player.isBot) {
             botThinking = true; render();
             schedule(() => {
@@ -544,7 +610,9 @@ function resolveTile(player, wasDouble) {
                 player.cash -= cost;
                 tile.stars++;
                 tile.stageLap = player.lapCount;
-                log(`🏗️ ${player.name}, ${tile.name}에 건설! (${tierName(tile)}, -${cost}만원, 통행료 ${getToll(tile)}만원)`);
+                const discounted = !!player.buildDiscount;
+                player.buildDiscount = null;
+                log(`🏗️ ${player.name}, ${tile.name}에 건설! (${tierName(tile)}, -${cost}만원${discounted ? ' · 할인권 사용' : ''}, 통행료 ${getToll(tile)}만원)`);
                 SFX.build();
               } else {
                 log(`${player.name}, 본인 소유의 ${tile.name} 도착. (건설 자금 부족)`);
@@ -558,7 +626,7 @@ function resolveTile(player, wasDouble) {
             window.__pendingResolve = afterResolve;
           }
         } else if (landmarkEligible) {
-          const cost = landmarkCost(tile);
+          const cost = effectiveLandmarkCost(player, tile);
           if (player.isBot) {
             botThinking = true; render();
             schedule(() => {
@@ -567,7 +635,9 @@ function resolveTile(player, wasDouble) {
                 player.cash -= cost;
                 tile.landmark = true;
                 tile.stageLap = player.lapCount;
-                log(`👑 ${player.name}, ${tile.name}에 ${tile.landmarkName}${tile.landmarkIcon}을(를) 건설했습니다! (-${cost}만원, 이제 인수 불가)`);
+                const discounted = !!player.buildDiscount;
+                player.buildDiscount = null;
+                log(`👑 ${player.name}, ${tile.name}에 ${tile.landmarkName}${tile.landmarkIcon}을(를) 건설했습니다! (-${cost}만원${discounted ? ' · 할인권 사용' : ''}, 이제 인수 불가)`);
                 SFX.landmark();
               } else {
                 log(`${player.name}, 본인 소유의 ${tile.name} 도착. (랜드마크 자금 부족)`);
@@ -601,16 +671,19 @@ function resolveTile(player, wasDouble) {
               chargePlayer(player, acq, { toPlayer: owner });
               tile.owner = player.idx;
               tile.stageLap = player.lapCount;
+              tile.tollBoost = false;
               log(`🏆 ${player.name}, ${owner.name} 소유 ${tile.name}을(를) 인수했습니다! (통행료 포함 -${acq}만원)`);
               SFX.buy();
               maybeCelebrateMonopoly(player, tile, () => {
                 if (tile.stars < 5) {
-                  const bCost = buildCost(tile);
+                  const bCost = effectiveBuildCost(player, tile);
                   if (botWantsToBuild(player, bCost)) {
                     player.cash -= bCost;
                     tile.stars++;
                     tile.stageLap = player.lapCount;
-                    log(`🏗️ ${player.name}, 인수 직후 ${tile.name} 추가 건설! (${tierName(tile)}, -${bCost}만원, 통행료 ${getToll(tile)}만원)`);
+                    const discounted = !!player.buildDiscount;
+                    player.buildDiscount = null;
+                    log(`🏗️ ${player.name}, 인수 직후 ${tile.name} 추가 건설! (${tierName(tile)}, -${bCost}만원${discounted ? ' · 할인권 사용' : ''}, 통행료 ${getToll(tile)}만원)`);
                     SFX.build();
                     render();
                   }
@@ -620,6 +693,7 @@ function resolveTile(player, wasDouble) {
             } else {
               log(`🏙️ ${player.name}, ${owner.name} 소유 ${tile.name} 도착. 통행료 ${toll}만원 지불.`);
               SFX.pay();
+              tile.tollBoost = false;
               chargePlayer(player, toll, { toPlayer: owner });
               afterResolve();
             }
@@ -670,12 +744,14 @@ function buildCurrentOnLanding() {
   ensureAudio();
   const p = players[current];
   const tile = TILES[p.pos];
-  const cost = buildCost(tile);
+  const cost = effectiveBuildCost(p, tile);
   if (p.cash < cost) return;
   p.cash -= cost;
   tile.stars++;
   tile.stageLap = p.lapCount;
-  log(`🏗️ ${p.name}, ${tile.name}에 건설! (${tierName(tile)}, -${cost}만원, 통행료 ${getToll(tile)}만원)`);
+  const discounted = !!p.buildDiscount;
+  p.buildDiscount = null;
+  log(`🏗️ ${p.name}, ${tile.name}에 건설! (${tierName(tile)}, -${cost}만원${discounted ? ' · 할인권 사용' : ''}, 통행료 ${getToll(tile)}만원)`);
   SFX.build();
   phase = 'resolving';
   finishPending();
@@ -695,11 +771,13 @@ function buildLandmarkCurrent() {
   ensureAudio();
   const p = players[current];
   const tile = TILES[p.pos];
-  const cost = landmarkCost(tile);
+  const cost = effectiveLandmarkCost(p, tile);
   if (p.cash < cost) return;
   p.cash -= cost;
   tile.landmark = true;
-  log(`👑 ${p.name}, ${tile.name}에 ${tile.landmarkName} ${tile.landmarkIcon}을(를) 건설했습니다! (-${cost}만원, 이제 인수 불가)`);
+  const discounted = !!p.buildDiscount;
+  p.buildDiscount = null;
+  log(`👑 ${p.name}, ${tile.name}에 ${tile.landmarkName} ${tile.landmarkIcon}을(를) 건설했습니다! (-${cost}만원${discounted ? ' · 할인권 사용' : ''}, 이제 인수 불가)`);
   SFX.landmark();
   phase = 'resolving';
   finishPending();
@@ -723,6 +801,7 @@ function payTollCurrent() {
   const toll = getToll(tile);
   log(`🏙️ ${p.name}, ${owner.name} 소유 ${tile.name} 통행료 ${toll}만원 지불.`);
   SFX.pay();
+  tile.tollBoost = false;
   chargePlayerInteractive(p, toll, { toPlayer: owner }, () => {
     phase = 'resolving';
     finishPending();
@@ -739,6 +818,7 @@ function acquireCurrent() {
   chargePlayer(p, cost, { toPlayer: owner });
   tile.owner = p.idx;
   tile.stageLap = p.lapCount;
+  tile.tollBoost = false;
   log(`🏆 ${p.name}, ${owner.name} 소유 ${tile.name}을(를) 인수했습니다! (통행료 포함 -${cost}만원)`);
   SFX.buy();
   phase = 'resolving';
@@ -759,12 +839,14 @@ function offerPostAcquireBuild(tile) {
 function buildPostAcquire() {
   const p = players[current];
   const tile = TILES[p.pos];
-  const cost = buildCost(tile);
+  const cost = effectiveBuildCost(p, tile);
   if (p.cash < cost) return;
   p.cash -= cost;
   tile.stars++;
   tile.stageLap = p.lapCount;
-  log(`🏗️ ${p.name}, 인수 직후 ${tile.name} 추가 건설! (${tierName(tile)}, -${cost}만원, 통행료 ${getToll(tile)}만원)`);
+  const discounted = !!p.buildDiscount;
+  p.buildDiscount = null;
+  log(`🏗️ ${p.name}, 인수 직후 ${tile.name} 추가 건설! (${tierName(tile)}, -${cost}만원${discounted ? ' · 할인권 사용' : ''}, 통행료 ${getToll(tile)}만원)`);
   SFX.build();
   phase = 'resolving';
   finishPending();

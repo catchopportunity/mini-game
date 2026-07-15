@@ -16,6 +16,7 @@ function getToll(tile) {
   const base = tile.tollBase;
   let mult = tile.landmark ? LANDMARK_TOLL_MULT : STAR_TOLL_MULT[tile.stars];
   if (groupFullyOwned(tile.owner, tile.group)) mult *= 2; // 독점은 건설 단계와 곱연산으로 중첩
+  if (tile.tollBoost) mult *= 2; // 황금열쇠 통행료 증폭권 — 다음 방문자가 지불할 때 소진됨
   return Math.round(base * mult);
 }
 

@@ -89,3 +89,74 @@ test.describe('봇 AI', () => {
     await expect(page.locator('#cash1')).toHaveText('930만원', { timeout: 3000 }); // 1000 - 70
   });
 });
+
+test.describe('황금열쇠 신규 메커니즘', () => {
+  test('통행료 증폭권이 걸린 도시는 통행료가 2배이고, 지불하면 소진된다', async ({ page }) => {
+    await page.goto('/bluemarble.html');
+    const boosted = await page.evaluate(() => {
+      TILES[1].owner = 1; // 방콕을 1호봇 소유로
+      TILES[1].tollBoost = true;
+      return getToll(TILES[1]); // tollBase 9 * ★0(1배) * 부스트(2배) = 18
+    });
+    expect(boosted).toBe(18);
+
+    await page.evaluate(() => {
+      current = 0;
+      players[0].pos = 1;
+      players[0].cash = 100;
+      phase = 'awaiting-toll-choice';
+      window.__pendingResolve = () => {};
+      renderActions();
+    });
+    await page.getByRole('button', { name: /통행료 내기/ }).click();
+    await expect(page.locator('#cash0')).toHaveText('82만원'); // 100 - 18
+    expect(await page.evaluate(() => TILES[1].tollBoost)).toBe(false);
+  });
+
+  test('보험증서는 세금과 그에 딸린 소각까지 완전히 면제한다', async ({ page }) => {
+    await page.goto('/bluemarble.html');
+    await page.evaluate(() => {
+      current = 0;
+      players[0].pos = 16; // 세금 칸
+      players[0].cash = 500;
+      players[0].paymentShield = true;
+      resolveTile(players[0], false);
+    });
+    await expect(page.locator('#cash0')).toHaveText('500만원'); // 세금도, 소각도 없음
+    expect(await page.evaluate(() => players[0].paymentShield)).toBe(false);
+  });
+
+  test('건설 할인권은 다음 건설비를 50% 할인하고 1회 소진된다', async ({ page }) => {
+    await page.goto('/bluemarble.html');
+    await page.evaluate(() => {
+      current = 0;
+      const tile = TILES[1]; // 방콕, price 60 → buildCost round(60*0.6*1) = 36
+      tile.owner = 0; tile.stars = 0; tile.stageLap = 0;
+      players[0].pos = 1;
+      players[0].lapCount = 1;
+      players[0].cash = 100;
+      players[0].buildDiscount = 0.5;
+      phase = 'awaiting-build';
+      window.__pendingResolve = () => {};
+      renderActions();
+    });
+    await page.getByRole('button', { name: '건설' }).click();
+    await expect(page.locator('#cash0')).toHaveText('82만원'); // 100 - 18(=36의 50%)
+    expect(await page.evaluate(() => players[0].buildDiscount)).toBe(null);
+  });
+
+  test('"두 장 중 선택" 카드는 서로 다른 카드 두 개를 보여주고, 고른 카드만 적용된다', async ({ page }) => {
+    await page.goto('/bluemarble.html');
+    await page.evaluate(() => {
+      current = 0;
+      resolveCardChoice(players[0], false, () => {});
+    });
+    await expect(page.locator('#promptBox')).toContainText('황금열쇠 두 장');
+    const buttons = page.locator('#actionRow button');
+    await expect(buttons).toHaveCount(2);
+    const [textA, textB] = await Promise.all([buttons.nth(0).textContent(), buttons.nth(1).textContent()]);
+    expect(textA).not.toBe(textB);
+    await buttons.first().click();
+    await expect(page.locator('#log')).toContainText('🔑');
+  });
+});

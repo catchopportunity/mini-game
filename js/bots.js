@@ -27,3 +27,9 @@ function botWantsToBuildLandmark(player, cost) {
 function botWantsToAcquire(player, tile, cost) {
   return tile.stars > 0 && player.cash - cost >= safetyBuffer(player, BOT_ACQUIRE_BUFFER);
 }
+
+// 황금열쇠 "두 장 중 선택" 카드에서 봇이 고를 쪽 — 유리한 쪽을 우선하고, 둘 다 같은 성향이면 무작위
+function chooseBotCard(optionA, optionB) {
+  if (optionA.favorable !== optionB.favorable) return optionA.favorable ? optionA : optionB;
+  return Math.random() < 0.5 ? optionA : optionB;
+}

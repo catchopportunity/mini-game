@@ -220,11 +220,12 @@ function renderActions() {
 
   if (phase === 'awaiting-build' && !p.isBot) {
     const tile = TILES[p.pos];
-    const cost = buildCost(tile);
+    const cost = effectiveBuildCost(p, tile);
     const nextTier = TIER_NAMES[tile.stars + 1];
     const nextToll = getToll(Object.assign({}, tile, { stars: tile.stars + 1 }));
+    const discountTag = p.buildDiscount ? ' (할인권 적용가)' : '';
     promptBox.style.display = 'block';
-    promptBox.textContent = `${tile.name}에 ${nextTier}을(를) 건설하시겠습니까? (${cost}만원 → 통행료 ${nextToll}만원으로 상승)`;
+    promptBox.textContent = `${tile.name}에 ${nextTier}을(를) 건설하시겠습니까? (${cost}만원${discountTag} → 통행료 ${nextToll}만원으로 상승)`;
     const buildBtn = document.createElement('button');
     buildBtn.textContent = '건설';
     buildBtn.disabled = p.cash < cost;
@@ -240,11 +241,12 @@ function renderActions() {
 
   if (phase === 'awaiting-post-build' && !p.isBot) {
     const tile = TILES[p.pos];
-    const cost = buildCost(tile);
+    const cost = effectiveBuildCost(p, tile);
     const nextTier = TIER_NAMES[tile.stars + 1];
     const nextToll = getToll(Object.assign({}, tile, { stars: tile.stars + 1 }));
+    const discountTag = p.buildDiscount ? ' (할인권 적용가)' : '';
     promptBox.style.display = 'block';
-    promptBox.textContent = `🏆 인수 기념! 한 바퀴 기다리지 않고 바로 ${nextTier}을(를) 건설하시겠습니까? (${cost}만원 → 통행료 ${nextToll}만원으로 상승)`;
+    promptBox.textContent = `🏆 인수 기념! 한 바퀴 기다리지 않고 바로 ${nextTier}을(를) 건설하시겠습니까? (${cost}만원${discountTag} → 통행료 ${nextToll}만원으로 상승)`;
     const buildBtn = document.createElement('button');
     buildBtn.textContent = '바로 건설';
     buildBtn.disabled = p.cash < cost;
@@ -260,9 +262,10 @@ function renderActions() {
 
   if (phase === 'awaiting-landmark' && !p.isBot) {
     const tile = TILES[p.pos];
-    const cost = landmarkCost(tile);
+    const cost = effectiveLandmarkCost(p, tile);
+    const discountTag = p.buildDiscount ? ' · 할인권 적용가' : '';
     promptBox.style.display = 'block';
-    promptBox.textContent = `${tile.landmarkIcon} ${tile.name}은 ${TIER_NAMES[5]}까지 다 지었고 한 바퀴를 돌았습니다! ${tile.landmarkName}(${cost}만원)을 건설하시겠습니까? (건설하면 이후 인수 불가)`;
+    promptBox.textContent = `${tile.landmarkIcon} ${tile.name}은 ${TIER_NAMES[5]}까지 다 지었고 한 바퀴를 돌았습니다! ${tile.landmarkName}(${cost}만원${discountTag})을 건설하시겠습니까? (건설하면 이후 인수 불가)`;
     const buildBtn = document.createElement('button');
     buildBtn.textContent = `${tile.landmarkName} 건설`;
     buildBtn.disabled = p.cash < cost;
@@ -314,6 +317,22 @@ function renderActions() {
       btn.onclick = () => sellAssetForPending(idx);
       actionRow.appendChild(btn);
     });
+    return;
+  }
+
+  if (phase === 'awaiting-card-choice' && !p.isBot) {
+    const { optionA, optionB } = pendingCardChoice;
+    promptBox.style.display = 'block';
+    promptBox.textContent = '🔑 황금열쇠 두 장 등장! 하나를 골라 적용하세요.';
+    const btnA = document.createElement('button');
+    btnA.textContent = cardText(optionA, p);
+    btnA.onclick = () => chooseCard('A');
+    const btnB = document.createElement('button');
+    btnB.className = 'secondary';
+    btnB.textContent = cardText(optionB, p);
+    btnB.onclick = () => chooseCard('B');
+    actionRow.appendChild(btnA);
+    actionRow.appendChild(btnB);
     return;
   }
 
